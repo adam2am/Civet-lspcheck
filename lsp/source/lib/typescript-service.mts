@@ -66,6 +66,9 @@ export interface FileMeta {
 interface Host extends LanguageServiceHost {
   getMeta(path: string): FileMeta | undefined
   addOrUpdateDocument(doc: TextDocument): void
+  invalidatePath(path: string): void
+  addFile(path: string): void
+  removeFile(path: string): void
 }
 
 interface Transpiler {
@@ -109,6 +112,29 @@ function TSHost(
   let self: Host;
 
   return self = Object.assign({}, baseHost, {
+    addFile(path: string): void {
+      path = getCanonicalFileName(path)
+      if (!scriptFileNames.has(path)) {
+        scriptFileNames.add(path)
+        projectVersion++
+        logger.info(`[HOST] addFile: Added ${path}, project now has ${scriptFileNames.size} files`)
+      }
+    },
+    removeFile(path: string): void {
+      path = getCanonicalFileName(path)
+      if (scriptFileNames.has(path)) {
+        scriptFileNames.delete(path)
+        snapshotMap.delete(path)
+        projectVersion++
+        logger.info(`[HOST] removeFile: Removed ${path}, project now has ${scriptFileNames.size} files`)
+      }
+    },
+    invalidatePath(path: string): void {
+      path = getCanonicalFileName(path)
+      snapshotMap.delete(path)
+      projectVersion++
+      logger.info(`[HOST] Invalidated path: ${path}. Updated project version to: ${projectVersion}`)
+    },
     getDefaultLibFileName(options: ts.CompilerOptions) {
       // TODO: this might not be correct for dev dev/test envs
       const result = path.join(dir, "lib", ts.getDefaultLibFileName(options))

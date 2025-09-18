@@ -35,10 +35,11 @@ import ts, {
   SemicolonPreference,
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { setTimeout } from 'timers/promises';
-import { handleSignatureHelp } from './features/index.mjs';
+import { setTimeout as setTimeoutPromise } from 'timers/promises';
+import { handleSignatureHelp, computeRenameEdits, handleRename } from './features/index.mjs';
 import type { FeatureDeps } from '../types/types.d';
 import { debugSettings } from './lib/debug.mjs';
+import { DependencyGraph } from './lib/dependency-graph.mjs';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -52,6 +53,12 @@ let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 // let hasDiagnosticRelatedInformationCapability = false;
 // comment out unused variable
+
+// Create the dependency graph for instant lookups
+const dependencyGraph = new DependencyGraph(logger);
+
+let filesToRefreshAfterRename: string[] | undefined;
+let activeRenameBarrier: WithResolvers<void> | undefined;
 
 // Mapping from abs file path -> path of nearest applicable project path (tsconfig.json base)
 const sourcePathToProjectPathMap = new Map<string, string>()
@@ -146,6 +153,9 @@ connection.onInitialize(async (params: InitializeParams) => {
       completionProvider: {
         resolveProvider: true
       },
+      renameProvider: {
+        prepareProvider: true
+      },
       // documentLinkProvider: {
       //   resolveProvider: true
       // },
@@ -163,8 +173,18 @@ connection.onInitialize(async (params: InitializeParams) => {
 
   if (hasWorkspaceFolderCapability) {
     result.capabilities.workspace = {
-      workspaceFolders: {
-        supported: true
+      workspaceFolders: { supported: true },
+      fileOperations: {
+        willRename: {
+          filters: [
+            { scheme: 'file', pattern: { glob: '**/*.civet' } }
+          ]
+        },
+        didRename: {
+          filters: [
+            { scheme: 'file', pattern: { glob: '**/*.civet' } }
+          ]
+        }
       }
     };
   }
@@ -183,16 +203,31 @@ connection.onInitialize(async (params: InitializeParams) => {
   return result;
 });
 
-connection.onInitialized(() => {
+connection.onInitialized(async () => {
   if (hasConfigurationCapability) {
     // Register for all configuration changes.
     connection.client.register(DidChangeConfigurationNotification.type, undefined);
   }
   if (hasWorkspaceFolderCapability) {
     connection.workspace.onDidChangeWorkspaceFolders(_event => {
-      logger.log('Workspace folder change event received.');
+      logger.info('Workspace folder change event received.');
     });
   }
+  
+  // Initialize the dependency graph in the background
+  setImmediate(async () => {
+    try {
+      await setTimeoutPromise(1000);
+      if (rootDir) {
+        logger.info('[DEPGRAPH] Starting background initialization of dependency graph');
+        await dependencyGraph.build(rootDir);
+        const stats = dependencyGraph.getStats();
+        logger.info(`[DEPGRAPH] Initialization complete: ${stats.totalFiles} files, ${stats.totalDependencies} dependencies.`);
+      }
+    } catch (error) {
+      logger.error(`[DEPGRAPH] Error during background initialization: ${String(error)}`);
+    }
+  });
 });
 
 const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
@@ -608,6 +643,11 @@ let changeQueue = new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
 const documentUpdateStatus = new Map<string, WithResolvers<boolean>>()
 async function executeQueue() {
+  if (activeRenameBarrier) {
+    if (debugSettings.rename) logger.info('[QUEUE] Waiting for rename barrier');
+    await activeRenameBarrier.promise;
+    if (debugSettings.rename) logger.info('[QUEUE] Rename barrier resolved');
+  }
   // Cancel any in-flight project-wide diagnostics update to avoid conflicts
   if (runningDiagnosticsUpdate) {
     runningDiagnosticsUpdate.isCanceled = true
@@ -635,8 +675,12 @@ async function executeQueue() {
 
   for (const { service, docs } of docsByProject.values()) {
     // Phase 1: Stage all changes within this project.
-    docs.forEach(doc => service.host.addOrUpdateDocument(doc));
-
+    docs.forEach(doc => {
+      service.host.addOrUpdateDocument(doc)
+      if (doc.uri.endsWith('.civet')) {
+        dependencyGraph.addOrUpdateFile(documentToSourcePath(doc), doc.getText());
+      }
+    });
     // Phase 2: Analyze all staged documents within this project.
     for (const doc of docs) {
       await updateDiagnosticsForDoc(doc, service);
@@ -655,7 +699,7 @@ async function scheduleExecuteQueue() {
   // Schedule executeQueue() if there isn't one already running or scheduled
   if (executeTimeout) return
   if (!changeQueue.size) return
-  await (executeTimeout = setTimeout(diagnosticsDelay))
+  await (executeTimeout = setTimeoutPromise(diagnosticsDelay))
   await executeQueue()
 }
 
@@ -666,6 +710,13 @@ documents.onDidChangeContent(async ({ document }) => {
   documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
+
+  await dependencyGraph.isReady;
+  if (document.uri.endsWith('.civet')) {
+    if (debugSettings.dependencyGraph) logger.log(`[DEPGRAPH] Updating graph for ${document.uri}`);
+    const filePath = documentToSourcePath(document);
+    dependencyGraph.addOrUpdateFile(filePath, document.getText());
+  }
 });
 
 async function updateDiagnosticsForDoc(document: TextDocument, service?: ResolvedService) {
@@ -769,7 +820,7 @@ const updateProjectDiagnostics = async (
   if (!program) return;
 
   // A single, short delay before starting the update for a project.
-  await setTimeout(diagnosticsPropagationDelay);
+  await setTimeoutPromise(diagnosticsPropagationDelay);
 
   for (const sourceFile of program.getSourceFiles()) {
     if (status.isCanceled) return;
@@ -812,7 +863,156 @@ function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode
-  logger.log('We received an file change event');
+  logger.info('File change event received');
+});
+
+// Prepare Rename (F2 preflight)
+connection.onPrepareRename(async (params) => {
+  if (debugSettings.rename) logger.info(`[RENAME:PREPARE] START for ${params.textDocument.uri}`);
+  try {
+    const sourcePath = documentToSourcePath(params.textDocument)
+    const service = await ensureServiceForSourcePath(sourcePath)
+    if (!service) return null;
+
+    let position = params.position
+    const doc = documents.get(params.textDocument.uri)
+    if (!doc) return null
+    await updating(params.textDocument)
+
+    let fileForTs = sourcePath
+    let offset = doc.offsetAt(position)
+    if (!sourcePath.match(tsSuffix)) {
+      const meta = service.host.getMeta(sourcePath)
+      if (!meta?.transpiledDoc) return null
+      const { transpiledDoc, sourcemapLines } = meta
+      if (sourcemapLines) position = forwardMap(sourcemapLines, position)
+      offset = transpiledDoc.offsetAt(position)
+      fileForTs = documentToSourcePath(transpiledDoc)
+    }
+
+    const info = service.getRenameInfo(fileForTs, offset, { allowRenameOfImportPath: false });
+    if (!info?.canRename) return null;
+
+    const program = service.getProgram();
+    if (!program) return null;
+    const sourceFile = program.getSourceFile(fileForTs);
+    if (!sourceFile) return null;
+
+    const span = info.triggerSpan;
+    let start = sourceFile.getLineAndCharacterOfPosition(span.start);
+    let end = sourceFile.getLineAndCharacterOfPosition(span.start + span.length);
+
+    const meta = service.host.getMeta(sourcePath)
+    if (meta?.sourcemapLines) {
+      start = remapPosition(start, meta.sourcemapLines);
+      end = remapPosition(end, meta.sourcemapLines);
+    }
+    
+    return { range: { start, end }, placeholder: info.displayName };
+  } catch (e) {
+    logger.error(`[RENAME:PREPARE] ERROR ${String(e)}`);
+    return null;
+  }
+});
+
+// Rename (F2)
+connection.onRenameRequest(async (params) => {
+  if (debugSettings.rename) logger.info(`[RENAME] START request -> newName:'${params.newName}'`);
+  
+  const sourcePath = documentToSourcePath(params.textDocument);
+  const service = await ensureServiceForSourcePath(sourcePath);
+  if (!service) return null;
+
+  let position = params.position
+  const doc = documents.get(params.textDocument.uri)
+  if (!doc) return null
+  await updating(params.textDocument)
+
+  let fileForTs = sourcePath
+  let offset = doc.offsetAt(position)
+  if (!sourcePath.match(tsSuffix)) {
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta?.transpiledDoc) return null
+    const { transpiledDoc, sourcemapLines } = meta
+    if (sourcemapLines) position = forwardMap(sourcemapLines, position)
+    offset = transpiledDoc.offsetAt(position)
+    fileForTs = documentToSourcePath(transpiledDoc)
+  }
+
+  const plan = {
+    renameAnchor: { fileForTs, offset },
+    newName: params.newName
+  };
+
+  const deps: FeatureDeps = { ensureServiceForSourcePath, documentToSourcePath, documents, updating, debug: debugSettings } as any;
+  (deps as any).console = logger
+  ;(deps as any).remapPosition = remapPosition
+  ;(deps as any).dependencyGraph = dependencyGraph
+  
+  return await handleRename(plan, deps);
+});
+
+connection.workspace.onWillRenameFiles(async (params) => {
+  logger.info(`[RENAME:WILL] START - ${params.files.length} files`);
+  activeRenameBarrier = withResolvers<void>();
+
+  const deps: FeatureDeps = { ensureServiceForSourcePath, documentToSourcePath, documents, updating, debug: debugSettings } as any;
+  (deps as any).console = logger
+  ;(deps as any).remapPosition = remapPosition
+  ;(deps as any).dependencyGraph = dependencyGraph
+
+  const { edits, filesToRefresh } = await computeRenameEdits(params as any, deps as any);
+  filesToRefreshAfterRename = filesToRefresh;
+  
+  await dependencyGraph.isReady;
+
+  return edits;
+});
+
+connection.workspace.onDidRenameFiles(async (params) => {
+  logger.info(`[RENAME:DID] Files renamed: ${params.files.length}`);
+
+  for (const fileRename of params.files) {
+    const oldPath = documentToSourcePath({ uri: fileRename.oldUri } as any);
+    const newPath = documentToSourcePath({ uri: fileRename.newUri } as any);
+
+    if (oldPath && newPath) {
+      dependencyGraph.renameFile(oldPath, newPath);
+    }
+
+    try {
+      const service = await ensureServiceForSourcePath(newPath);
+      service.host.removeFile(oldPath);
+
+      const newDoc = documents.get(fileRename.newUri);
+      if (!newDoc) {
+        service.host.addFile(newPath);
+      } else {
+        service.host.addOrUpdateDocument(newDoc);
+      }
+    } catch (e) {
+      logger.warn(`[RENAME:DID] Failed to update TS service for rename: ${String(e)}`);
+    }
+  }
+
+  if (filesToRefreshAfterRename) {
+    for (const uri of filesToRefreshAfterRename) {
+      const doc = documents.get(uri);
+      if (!doc) {
+        const sourcePath = documentToSourcePath({ uri } as any);
+        const projPath = getProjectPathFromSourcePath(sourcePath);
+        const service = projectPathToServiceMap.get(projPath);
+        service?.host.invalidatePath(sourcePath);
+      }
+    }
+  }
+
+  filesToRefreshAfterRename = undefined;
+
+  if (debugSettings.rename) logger.info(`[RENAME:DID] Releasing rename barrier`);
+  activeRenameBarrier?.resolve();
+  activeRenameBarrier = undefined;
+  logger.info(`[RENAME:DID] END`);
 });
 
 // Make the text document manager listen on the connection

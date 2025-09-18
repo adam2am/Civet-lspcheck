@@ -9,5 +9,7 @@
 export const debugSettings = {
   signatureHelp: false,
   completions: false,
+  rename: false,
+  dependencyGraph: false,
   // Add new debug flags here as needed
 };
