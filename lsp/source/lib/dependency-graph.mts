@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { performance } from 'perf_hooks';
 import { findAllImports, stripQuotes } from './civet-parser.mjs';
+import { debugSettings } from './debug.mjs';
 
 export interface DependencyInfo {
   /** Files that this file imports */
@@ -56,7 +57,7 @@ export class DependencyGraph {
         const content = await fs.readFile(filePath, 'utf-8');
         this.addOrUpdateFile(filePath, content);
       } catch (e) {
-        this.logger.log(`[DEPGRAPH] WARN: Could not read file during initial scan: ${filePath}. ${String(e)}`);
+        if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] WARN: Could not read file during initial scan: ${filePath}. ${String(e)}`);
       }
     }
 
@@ -72,7 +73,7 @@ export class DependencyGraph {
    */
   addOrUpdateFile(filePath: string, content: string): void {
     const normalizedPath = path.normalize(filePath);
-    this.logger.log(`[DEPGRAPH_TRACE] addOrUpdateFile: Processing ${normalizedPath}`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] addOrUpdateFile: Processing ${normalizedPath}`);
     const fileDir = path.dirname(normalizedPath);
 
     const oldImports = this.graph.get(normalizedPath)?.imports || new Set<string>();
@@ -92,9 +93,9 @@ export class DependencyGraph {
           }
           const finalPath = path.normalize(resolvedPath);
           newImports.add(finalPath);
-          this.logger.log(`[DEPGRAPH_TRACE] addOrUpdateFile: Found import from ${normalizedPath} -> ${finalPath}`);
+          if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] addOrUpdateFile: Found import from ${normalizedPath} -> ${finalPath}`);
         } catch (e) {
-          this.logger.log(`[DEPGRAPH] WARN: Could not resolve import '${specRaw}' in file ${normalizedPath}. ${String(e)}`);
+          if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] WARN: Could not resolve import '${specRaw}' in file ${normalizedPath}. ${String(e)}`);
         }
       }
     }
@@ -114,18 +115,18 @@ export class DependencyGraph {
       this.graph.get(importPath)?.importedBy.delete(normalizedPath);
     }
 
-    this.logger.log(`[DEPGRAPH_DEBUG] ${normalizedPath}: removed reverse links from ${removedImports.size} old imports.`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_DEBUG] ${normalizedPath}: removed reverse links from ${removedImports.size} old imports.`);
 
     for (const importPath of addedImports) {
       if (!this.graph.has(importPath)) {
         this.graph.set(importPath, { imports: new Set(), importedBy: new Set() });
-        this.logger.log(`[DEPGRAPH_DEBUG] Created new node for imported file: ${importPath}`);
+        if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_DEBUG] Created new node for imported file: ${importPath}`);
       }
       this.graph.get(importPath)!.importedBy.add(normalizedPath);
-      this.logger.log(`[DEPGRAPH_DEBUG] Added reverse link: ${importPath} is now imported by ${normalizedPath}`);
+      if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_DEBUG] Added reverse link: ${importPath} is now imported by ${normalizedPath}`);
     }
     
-    this.logger.log(`[DEPGRAPH_DEBUG] ${normalizedPath}: added reverse links to ${addedImports.size} new imports. (['${[...addedImports].join("', '")}'])`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_DEBUG] ${normalizedPath}: added reverse links to ${addedImports.size} new imports. (['${[...addedImports].join("', '")}'])`);
     // Note: Final dependent counts will be logged by renameFile if a rename operation follows
     
     // this.logger.log(`[DEPGRAPH] Updated ${normalizedPath}. Imports: ${newImports.size}, Imported By: ${node.importedBy.size}`);
@@ -150,7 +151,7 @@ export class DependencyGraph {
     }
 
     this.graph.delete(normalizedPath);
-    this.logger.log(`[DEPGRAPH] Removed ${normalizedPath} from the graph.`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] Removed ${normalizedPath} from the graph.`);
   }
 
   /**
@@ -163,7 +164,7 @@ export class DependencyGraph {
 
     const oldNode = this.graph.get(oldNormalized);
     if (!oldNode) {
-      this.logger.log(`[DEPGRAPH] renameFile: Attempted to rename a file not in the graph: ${oldNormalized}`);
+      if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] renameFile: Attempted to rename a file not in the graph: ${oldNormalized}`);
       return;
     }
 
@@ -206,7 +207,7 @@ export class DependencyGraph {
     this.graph.delete(oldNormalized);
 
     const finalNode = this.graph.get(newNormalized);
-    this.logger.log(`[DEPGRAPH] Renamed ${oldNormalized} to ${newNormalized}. Final node: imports=${finalNode?.imports.size ?? 0}, importedBy=${finalNode?.importedBy.size ?? 0}`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] Renamed ${oldNormalized} to ${newNormalized}. Final node: imports=${finalNode?.imports.size ?? 0}, importedBy=${finalNode?.importedBy.size ?? 0}`);
   }
 
   /**
@@ -215,7 +216,7 @@ export class DependencyGraph {
    */
   getDependentsOf(filePath: string): string[] {
     const normalizedPath = path.normalize(filePath);
-    this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Querying for ${normalizedPath}`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Querying for ${normalizedPath}`);
 
     const dependents = new Set<string>();
 
@@ -223,18 +224,18 @@ export class DependencyGraph {
     // No more clever extension-less nonsense that never works anyway
     const node = this.graph.get(normalizedPath);
     if (node) {
-      this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Found node with ${node.importedBy.size} dependents`);
+      if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Found node with ${node.importedBy.size} dependents`);
       node.importedBy.forEach(dep => {
-        this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Adding dependent: ${dep}`);
+        if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Adding dependent: ${dep}`);
         dependents.add(dep);
       });
     } else {
-      this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: No node found for ${normalizedPath}`);
-      this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Available keys: [${Array.from(this.graph.keys()).slice(0, 5).join(', ')}...]`);
+      if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: No node found for ${normalizedPath}`);
+      if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH_TRACE] getDependentsOf: Available keys: [${Array.from(this.graph.keys()).slice(0, 5).join(', ')}...]`);
     }
 
     const result = Array.from(dependents);
-    this.logger.log(`[DEPGRAPH] Found ${result.length} dependents for ${filePath}`);
+    if (debugSettings.dependencyGraph) this.logger.log(`[DEPGRAPH] Found ${result.length} dependents for ${filePath}`);
     return result;
   }
 

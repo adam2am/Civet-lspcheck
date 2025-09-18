@@ -7,7 +7,7 @@
  *
  */
 export const debugSettings = {
-  signatureHelp: false,
+  signatureHelp: true,
   completions: false,
   rename: false,
   dependencyGraph: false,
