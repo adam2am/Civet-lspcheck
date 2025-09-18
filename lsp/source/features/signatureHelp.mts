@@ -65,22 +65,14 @@ export async function handleSignatureHelp(
   // Non-transpiled (plain TS/JS/etc)
   if (sourcePath.match(tsSuffix)) {
     if (deps.debug.signatureHelp) console.debug(`[SIGHELP] Non-transpiled file (TS/JS): ${sourcePath}`);
-    // Prefer live TextDocument when available for accuracy
-    const doc = deps.documents.get(textDocument.uri)
-    if (doc) {
-      targetPath = sourcePath
-      targetOffset = doc.offsetAt(position)
-      if (deps.debug.signatureHelp) console.debug(`[SIGHELP] Using live document, offset: ${targetOffset}`);
-    } else {
-      const sourceFile = service.getProgram()?.getSourceFile(sourcePath)
-      if (!sourceFile) {
-        if (deps.debug.signatureHelp) console.debug(`[SIGHELP] No source file found in program for ${sourcePath}`);
-        return null;
-      }
-      targetPath = sourcePath
-      targetOffset = sourceFile.getPositionOfLineAndCharacter(position.line, position.character)
-      if (deps.debug.signatureHelp) console.debug(`[SIGHELP] Using source file, offset: ${targetOffset}`);
+    const sourceFile = service.getProgram()?.getSourceFile(sourcePath)
+    if (!sourceFile) {
+      if (deps.debug.signatureHelp) console.debug(`[SIGHELP] No source file found in program for ${sourcePath}`);
+      return null;
     }
+    targetPath = sourcePath
+    targetOffset = sourceFile.getPositionOfLineAndCharacter(position.line, position.character)
+    if (deps.debug.signatureHelp) console.debug(`[SIGHELP] Using source file for offset: ${targetOffset}`);
   } else {
     // Transpiled (.civet)
     if (deps.debug.signatureHelp) console.debug(`[SIGHELP] Transpiled file (.civet): ${sourcePath}`);

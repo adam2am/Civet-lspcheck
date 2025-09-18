@@ -263,9 +263,7 @@ function TSHost(
         scriptFileNames.add(path)
       }
 
-      if (!pathMap.has(path)) {
-        pathMap.set(path, doc)
-      }
+      pathMap.set(path, doc)
 
       return
     },
