@@ -69,6 +69,20 @@ function activateClient(context: ExtensionContext)
   workspace.createFileSystemWatcher("**/{tsconfig,package,🐈,civetconfig,civet.config}.{json,yaml,yml,civet,js}").onDidChange =>
     await client?.stop()
     await client.start()
+  
+  // Auto-save files that were modified by import updates (no UI notification)
+  // TODO: This is a temporary workaround. A perfectly formed WorkspaceEdit
+  // should not require this. Once edits are 100% reliable, this can be removed.
+  client.onNotification 'civet/autoSaveFiles', ({ uris }: { uris: string[] }) =>
+    try
+      console.log `[CLIENT] Auto-saving ${uris.length} modified files after import updates`
+      for const uriString of uris
+        const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() is uriString)
+        if doc?.isDirty
+          await doc.save()
+      console.log `[CLIENT] Auto-save completed`
+    catch err
+      console.error '[CLIENT] Auto-save failed:', err
 
 function activateCommands(context: ExtensionContext)
   commandDisposable := vscode.commands.registerCommand "civet.action.restartServer", =>

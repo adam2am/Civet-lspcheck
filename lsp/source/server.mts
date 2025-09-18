@@ -995,6 +995,9 @@ connection.workspace.onDidRenameFiles(async (params) => {
     }
   }
 
+  // Store the list before clearing it for the auto-save logic below
+  const filesToAutoSave = filesToRefreshAfterRename;
+
   if (filesToRefreshAfterRename) {
     for (const uri of filesToRefreshAfterRename) {
       const doc = documents.get(uri);
@@ -1008,6 +1011,24 @@ connection.workspace.onDidRenameFiles(async (params) => {
   }
 
   filesToRefreshAfterRename = undefined;
+
+  // Auto-save files that were modified by import updates
+  if (filesToAutoSave?.length) {
+    try {
+      // Filter to only open files that actually have unsaved changes
+      const openModifiedFiles = filesToAutoSave.filter((uri: string) => {
+        const doc = documents.get(uri);
+        return doc; // If it's in our documents collection, it's open
+      });
+      
+      if (openModifiedFiles.length > 0) {
+        if (debugSettings.rename) logger.log(`[RENAME:DID] Auto-saving ${openModifiedFiles.length} modified open file(s)`);
+        connection.sendNotification('civet/autoSaveFiles', { uris: openModifiedFiles });
+      }
+    } catch (err) {
+      if (debugSettings.rename) logger.log(`[RENAME:DID] Auto-save request failed: ${err}`);
+    }
+  }
 
   if (debugSettings.rename) logger.info(`[RENAME:DID] Releasing rename barrier`);
   activeRenameBarrier?.resolve();
