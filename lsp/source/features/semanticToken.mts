@@ -161,21 +161,22 @@ import {
       let transpiledPath: string
   
       if (isPlainTs) {
-        if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS processing plain TS/JS file')
         tsDoc = doc
         transpiledPath = sourcePath
-      } else {
+        if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS processing plain TS/JS file')
+      } 
+      else {
         if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS processing .civet file')
-      const meta = service.host.getMeta(sourcePath)
-      if (!meta || !meta.transpiledDoc) {
-          if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS no meta/transpiledDoc, returning empty')
-          return { data: [] }
-        }
-        tsDoc = meta.transpiledDoc
-        sourcemapLines = meta.sourcemapLines
-        civetDoc = doc
-        transpiledPath = documentToSourcePath(tsDoc)
-        if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS transpiledPath:', transpiledPath)
+        const meta = service.host.getMeta(sourcePath)
+        if (!meta || !meta.transpiledDoc) {
+            if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS no meta/transpiledDoc, returning empty')
+            return { data: [] }
+          }
+          tsDoc = meta.transpiledDoc
+          sourcemapLines = meta.sourcemapLines
+          civetDoc = doc
+          transpiledPath = documentToSourcePath(tsDoc)
+          if (SEM_DEBUG) console.log('🔍 SEMANTIC-TOKENS transpiledPath:', transpiledPath)
       }
   
       const builder = new SemanticTokensBuilder()
@@ -183,7 +184,8 @@ import {
       const result = builder.build()
       if (SEM_DEBUG) console.log(`🔍 SEMANTIC-TOKENS result token count: ${result.data.length / 5} for ${isPlainTs ? 'TS' : 'civet'}`)
       return result
-    } catch (e) {
+    } 
+    catch (e) {
       console.warn('🔍 SEMANTIC-TOKENS failed:', e)
       return { data: [] }
     }
@@ -238,12 +240,13 @@ import {
     return data
   }
   
+
   const getSyntacticTokens: TokenProvider = (ctx) => {
     const { service, filePath, start, length } = ctx
     const info = service.getEncodedSyntacticClassifications(filePath, { start, length })
     const spans = extractSpans(info);
     if (!spans || spans.length === 0) return undefined
-  
+
     if (SEM_DEBUG) console.log('🔍 SEM-PROVIDER: Using Syntactic, count:', spans.length / 3)
     return spans
   }
