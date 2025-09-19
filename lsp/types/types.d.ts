@@ -1,5 +1,5 @@
 import type { TextDocument } from 'vscode-languageserver-textdocument';
-import type { TextDocumentIdentifier, Diagnostic } from 'vscode-languageserver';
+import type { TextDocumentIdentifier, Diagnostic, TextDocuments } from 'vscode-languageserver';
 import TSService from '../source/lib/typescript-service.mjs';
 
 export type ResolvedService = Awaited<ReturnType<typeof TSService>>;
@@ -20,12 +20,22 @@ export interface LanguageServiceContext {
 export type DebugSettings = {
   signatureHelp: boolean;
   completions: boolean;
+  rename: boolean;
+  dependencyGraph: boolean;
+  semanticTokens: {
+    basic: boolean;
+    verbose: boolean;
+    performance: boolean;
+    tokens: boolean;
+    refinement: boolean;
+    markers: string[];
+  };
 }
 
 export type FeatureDeps = {
   ensureServiceForSourcePath: (sourcePath: string) => Promise<ResolvedService | undefined>;
   documentToSourcePath: (doc: TextDocument | TextDocumentIdentifier) => string;
-  documents: {
+  documents: TextDocuments<TextDocument> & {
     get: (uri: string) => TextDocument | undefined;
   };
   updating: (doc: { uri: string }) => Promise<boolean> | undefined;

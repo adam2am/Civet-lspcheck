@@ -36,7 +36,14 @@ import ts, {
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout as setTimeoutPromise } from 'timers/promises';
-import { handleSignatureHelp, computeRenameEdits, handleRename } from './features/index.mjs';
+import { 
+  handleSignatureHelp, 
+  computeRenameEdits, 
+  handleRename,
+  getSemanticLegend,
+  handleSemanticTokensFull,
+  handleSemanticTokensRange
+} from './features/index.mjs';
 import type { FeatureDeps } from '../types/types.d';
 import { debugSettings } from './lib/debug.mjs';
 import { DependencyGraph } from './lib/dependency-graph.mjs';
@@ -166,6 +173,11 @@ connection.onInitialize(async (params: InitializeParams) => {
       signatureHelpProvider: {
         triggerCharacters: ['(', ',', '<'],
         retriggerCharacters: [')', '>']
+      },
+      semanticTokensProvider: {
+        legend: getSemanticLegend(),
+        full: true,
+        range: true
       },
 
     }
@@ -588,6 +600,28 @@ connection.onSignatureHelp(async (params) => {
   }
   
   return result;
+});
+
+connection.languages.semanticTokens.on(async (params) => {
+  const deps: FeatureDeps = {
+    documents,
+    ensureServiceForSourcePath,
+    documentToSourcePath,
+    updating,
+    debug: debugSettings,
+  };
+  return handleSemanticTokensFull(params, deps);
+});
+
+connection.languages.semanticTokens.onRange(async (params) => {
+  const deps: FeatureDeps = {
+    documents,
+    ensureServiceForSourcePath,
+    documentToSourcePath,
+    updating,
+    debug: debugSettings,
+  };
+  return handleSemanticTokensRange(params, deps);
 });
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
