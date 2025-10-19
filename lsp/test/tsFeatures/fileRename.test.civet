@@ -1,0 +1,243 @@
+import { describe, it, beforeEach, afterEach } from "mocha"
+import assert from "assert"
+import path from "path"
+import fs from "fs/promises"
+import { TextDocument } from "vscode-languageserver-textdocument"
+import { findAllImports } from "../../source/lib/civet-parser.mjs"
+
+// Test fixtures to create and clean up
+testDir .= './test-rename-fixtures'
+
+createTestFile := async (filePath: string, content: string) ->
+  dir := path.dirname(filePath)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(filePath, content, 'utf-8')
+
+cleanupTestDir := async ->
+  if (await fs.stat(testDir).catch(() => null)) {
+    await fs.rm(testDir, { recursive: true, force: true })
+  }
+
+describe "File Rename Integration - Parser Enhancements", ->
+  beforeEach async ->
+    await cleanupTestDir()
+    await fs.mkdir(testDir, { recursive: true })
+
+  afterEach async ->
+    await cleanupTestDir()
+
+  describe "Rename Detection - Named Imports", ->
+    it "detects named import during rename", async ->
+      testFile := path.join(testDir, 'test.civet')
+      await createTestFile(testFile, 'import { foo } from "./module.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './module.civet')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "detects import type during rename", async ->
+      testFile := path.join(testDir, 'test.civet')
+      await createTestFile(testFile, 'import type { MyType } from "./types.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './types.civet')
+
+  describe "Rename Detection - Re-exports", ->
+    it "detects named re-export", async ->
+      testFile := path.join(testDir, 're-export.civet')
+      await createTestFile(testFile, 'export { x, y } from "./module.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './module.civet')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "detects namespace re-export", async ->
+      testFile := path.join(testDir, 're-export-ns.civet')
+      await createTestFile(testFile, 'export * from "./all-exports.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './all-exports.civet')
+    
+    it "detects type re-export", async ->
+      testFile := path.join(testDir, 're-export-type.civet')
+      await createTestFile(testFile, 'export type { T } from "./type-defs.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './type-defs.civet')
+      assert.strictEqual(imports[0].type, 'from')
+
+  describe "Rename Detection - Side-Effects", ->
+    it "detects side-effect import", async ->
+      testFile := path.join(testDir, 'side-effect.civet')
+      await createTestFile(testFile, 'import "./setup.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './setup.civet')
+      assert.strictEqual(imports[0].type, 'side-effect')
+    
+    it "detects side-effect export", async ->
+      testFile := path.join(testDir, 'side-effect-export.civet')
+      await createTestFile(testFile, 'export "./init.civet"')
+      
+      content := await fs.readFile(testFile, 'utf-8')
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './init.civet')
+      assert.strictEqual(imports[0].type, 'side-effect')
+
+  describe "Rename Detection - Complex Scenarios", ->
+    it "detects multiple imports and exports in single file", async ->
+      testFile := path.join(testDir, 'complex.civet')
+      content := """
+        import { a } from "./a.civet"
+        export { b } from "./b.civet"
+        import type { C } from "./c.civet"
+        export type { D } from "./d.civet"
+        import "./side1.civet"
+        export "./side2.civet"
+        """
+      await createTestFile(testFile, content)
+      
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 6)
+      assert.strictEqual(imports[0].spec, './a.civet')
+      assert.strictEqual(imports[1].spec, './b.civet')
+      assert.strictEqual(imports[2].spec, './c.civet')
+      assert.strictEqual(imports[3].spec, './d.civet')
+      assert.strictEqual(imports[4].spec, './side1.civet')
+      assert.strictEqual(imports[4].type, 'side-effect')
+      assert.strictEqual(imports[5].spec, './side2.civet')
+      assert.strictEqual(imports[5].type, 'side-effect')
+    
+    it "handles multiline export statements", async ->
+      testFile := path.join(testDir, 'multiline.civet')
+      content := """
+        export {
+          x,
+          y as yRenamed,
+          z
+        } from "./multiline-source.civet"
+        """
+      await createTestFile(testFile, content)
+      
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './multiline-source.civet')
+
+  describe "buildCivetImportEdit - Offset Preservation", ->
+    it "correctly identifies quoted string boundaries for editing", ->
+      document := TextDocument.create('test://file.civet', 'civet', 0, 'export { x } from "./lib.civet"')
+      imports := findAllImports(document.getText())
+      
+      assert.strictEqual(imports.length, 1)
+      match := imports[0]
+      
+      // Verify we can extract exactly what was matched
+      extracted := document.getText().substring(match.offset, match.offset + match.length)
+      assert.strictEqual(extracted, '"./lib.civet"')
+    
+    it "handles single-quoted imports", ->
+      document := TextDocument.create('test://file.civet', 'civet', 0, "import type { T } from './types.civet'")
+      imports := findAllImports(document.getText())
+      
+      assert.strictEqual(imports.length, 1)
+      match := imports[0]
+      
+      extracted := document.getText().substring(match.offset, match.offset + match.length)
+      assert.strictEqual(extracted, "'./types.civet'")
+
+  describe "Relative Path Handling", ->
+    it "correctly tracks imports at different directory levels", async ->
+      // Simulating a file structure:
+      // - src/features/helper.civet (imports from ../utils)
+      // - src/utils/math.civet
+      
+      helperContent := 'export { add } from "../utils/math.civet"'
+      imports := findAllImports(helperContent)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, '../utils/math.civet')
+    
+    it "handles absolute path imports", ->
+      absContent := 'import { config } from "/app/config.civet"'
+      imports := findAllImports(absContent)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, '/app/config.civet')
+
+  describe "Edge Cases in Rename Context", ->
+    it "ignores string literals that look like imports", ->
+      content := 'const msg = "import { x } from \\"./file.civet\\""'
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 0)
+    
+    it "ignores import in comments", ->
+      content := '// import { x } from "./commented.civet"\nexport { real } from "./actual.civet"'
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './actual.civet')
+    
+    it "correctly handles export { x } without from clause", ->
+      // Local exports shouldn't trigger rename updates
+      content := 'export { x }'
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 0)
+
+    it 'correctly handles re-export with renaming', ->
+      content := 'export { add as sum } from "./math.civet"'
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './math.civet')
+
+    it 'ignores imports in template literals during rename', ->
+      content := '
+      const template = `import { fake } from "./ignored.civet"`
+      import { real } from "./actual.civet"
+      '
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './actual.civet')
+
+    it 'correctly identifies namespace imports', ->
+      content := 'import * as utils from "./utils.civet"'
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './utils.civet')
+
+    it 'handles multiple exports on separate lines', ->
+      content := `
+      export { a } from "./a.civet"
+      export { b } from "./b.civet"
+      export { c } from "./c.civet"
+      `
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 3)
+
+    it 'ignores fake imports in comments before real imports', ->
+      content := `// export { fake } from "./commented.civet"
+/* export { also-fake } from "./block.civet" */
+export { real } from "./actual.civet"`
+      imports := findAllImports(content)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './actual.civet')

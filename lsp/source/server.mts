@@ -856,15 +856,25 @@ const updateProjectDiagnostics = async (
   // A single, short delay before starting the update for a project.
   await setTimeoutPromise(diagnosticsPropagationDelay);
 
+  const seenDocUris = new Set<string>();
+
+  const tryUpdateDoc = async (fileName: string) => {
+    if (status.isCanceled) return;
+    const uri = pathToFileURL(fileName).toString();
+    if (seenDocUris.has(uri)) return;
+    const doc = documents.get(uri);
+    if (!doc) return;
+    seenDocUris.add(uri);
+    await updateDiagnosticsForDoc(doc, service);
+  };
+
   for (const sourceFile of program.getSourceFiles()) {
     if (status.isCanceled) return;
-
-    // We only send diagnostics for files the user actually has open,
-    // even though we're checking every file in the project for correctness.
-    const docUri = pathToFileURL(sourceFile.fileName).toString();
-    const doc = documents.get(docUri);
-    if (doc) {
-      await updateDiagnosticsForDoc(doc, service);
+    await tryUpdateDoc(sourceFile.fileName);
+    if (status.isCanceled) return;
+    const sourceFileName = service.getSourceFileName(sourceFile.fileName);
+    if (sourceFileName && sourceFileName !== sourceFile.fileName) {
+      await tryUpdateDoc(sourceFileName);
     }
   }
 }
