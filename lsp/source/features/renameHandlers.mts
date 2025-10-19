@@ -219,6 +219,78 @@ export async function computeRenameEdits(
   return { edits: finalEdit, filesToRefresh };
 }
 
+async function applyAliasPropagation(
+  aliasChanges: Array<{ modulePath: string; oldName: string; newName: string }>,
+  service: ResolvedService,
+  deps: FeatureDeps,
+  workspaceEdit: WorkspaceEdit
+) {
+  if (aliasChanges.length === 0) return;
+  const program = service.getProgram();
+  if (!program) return;
+
+  const documentEntries = new Map<string, { doc: TextDocument; content: string }>();
+  const documentsAccessor = (deps as any).documents;
+  if (documentsAccessor?.all) {
+    for (const doc of documentsAccessor.all()) {
+      try {
+        const sourcePath = deps.documentToSourcePath(doc);
+        documentEntries.set(sourcePath, { doc, content: doc.getText() });
+      } catch {}
+    }
+  }
+
+  for (const sourceFile of program.getSourceFiles()) {
+    const sourcePath = service.getSourceFileName(sourceFile.fileName);
+    if (!sourcePath.endsWith('.civet')) continue;
+    if (documentEntries.has(sourcePath)) continue;
+    try {
+      const content = await fs.readFile(sourcePath, 'utf8');
+      const uri = pathToFileURL(sourcePath).toString();
+      const tempDoc = TextDocument.create(uri, 'civet', 0, content);
+      documentEntries.set(sourcePath, { doc: tempDoc, content });
+    } catch {}
+  }
+
+  for (const [sourcePath, { doc, content }] of documentEntries) {
+    const docUri = doc.uri ?? pathToFileURL(sourcePath).toString();
+    const matches = findAllImports(content);
+    const docDir = path.dirname(sourcePath);
+
+    for (const { modulePath, oldName, newName } of aliasChanges) {
+      const moduleNoExt = modulePath.replace(/\.[^/]+$/, '');
+
+      for (const match of matches) {
+        if (match.type !== 'from') continue;
+        const specRaw = stripQuotes(match.spec);
+        const specAbs = path.resolve(docDir, specRaw);
+        const specNoExt = specAbs.replace(/\.[^/]+$/, '');
+        if (specAbs !== modulePath && specNoExt !== moduleNoExt) continue;
+
+        const braceStart = content.lastIndexOf('{', match.offset);
+        const braceEnd = content.indexOf('}', braceStart);
+        if (braceStart === -1 || braceEnd === -1 || braceEnd <= braceStart) continue;
+
+        const braceSection = content.slice(braceStart, braceEnd);
+        const regex = new RegExp(`\\b${oldName}\\b`, 'g');
+        let braceMatch: RegExpExecArray | null;
+        while ((braceMatch = regex.exec(braceSection)) !== null) {
+          const startOffset = braceStart + braceMatch.index;
+          const endOffset = startOffset + oldName.length;
+          if (content.slice(startOffset, endOffset) === newName) continue;
+
+          const start = doc.positionAt(startOffset);
+          const end = doc.positionAt(endOffset);
+
+          if (!workspaceEdit.changes) workspaceEdit.changes = {};
+          if (!workspaceEdit.changes[docUri]) workspaceEdit.changes[docUri] = [];
+          workspaceEdit.changes[docUri]!.push({ range: { start, end }, newText: newName });
+        }
+      }
+    }
+  }
+}
+
 export async function handleRename(
   plan: { renameAnchor: { fileForTs: string, offset: number }, newName: string },
   deps: FeatureDeps
@@ -254,6 +326,7 @@ export async function handleRename(
   if (!program) return null;
 
   const workspaceEdit: WorkspaceEdit = { changes: {} };
+  const aliasChanges: Array<{ modulePath: string; oldName: string; newName: string }> = [];
 
   for (const edit of edits) {
     const sourceFile = program.getSourceFile(edit.fileName);
@@ -278,6 +351,7 @@ export async function handleRename(
     // Log before remapping if debug is on
     if (debugSettings.renameLogging?.logRanges && (deps as any).console?.log) {
       (deps as any).console.log(`[RENAME:RANGE-TS] fileName=${edit.fileName} start=${JSON.stringify(start)} end=${JSON.stringify(end)}`);
+      (deps as any).console.log(`[RENAME:EDIT-OBJ] edit object: ${JSON.stringify(edit, null, 2)}`);
     }
 
     const meta = service.host.getMeta(rawSourceName);
@@ -314,9 +388,48 @@ export async function handleRename(
       }
     }
 
+    // Use sophisticated rename information from TypeScript if available
+    let newText = plan.newName;
+
+    const hasPrefix = typeof edit.prefixText === 'string';
+    const hasSuffix = typeof edit.suffixText === 'string';
+
+    // If TypeScript provides prefix and/or suffix text for sophisticated renames (like import aliasing),
+    // use that instead of naive replacement
+    if (hasPrefix || hasSuffix) {
+      const prefixText = hasPrefix ? edit.prefixText ?? '' : '';
+      const suffixText = hasSuffix ? edit.suffixText ?? '' : '';
+
+      if (hasSuffix) {
+        const originalText = doc.getText({ start, end });
+        const suffixTrim = suffixText.trimStart();
+        if (suffixTrim.startsWith('as ') && suffixTrim.slice(3).trim() === originalText) {
+          newText = `${prefixText}${plan.newName}`;
+          aliasChanges.push({ modulePath: rawSourceName, oldName: originalText, newName: plan.newName });
+          if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+            (deps as any).console.log(`[RENAME:SOPHISTICATED] Removing alias suffix for ${originalText} -> ${plan.newName}`);
+          }
+        } else {
+          newText = `${prefixText}${plan.newName}${suffixText}`;
+          if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+            (deps as any).console.log(`[RENAME:SOPHISTICATED] Using prefix/suffix: "${prefixText}" + "${plan.newName}" + "${suffixText}" = "${newText}"`);
+          }
+        }
+      } else {
+        newText = `${prefixText}${plan.newName}${suffixText}`;
+        if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+          (deps as any).console.log(`[RENAME:SOPHISTICATED] Using prefix/suffix: "${prefixText}" + "${plan.newName}" + "${suffixText}" = "${newText}"`);
+        }
+      }
+    } else {
+      if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+        (deps as any).console.log(`[RENAME:SIMPLE] Using simple replacement: "${newText}"`);
+      }
+    }
+    
     workspaceEdit.changes![uri].push({
       range: { start, end },
-      newText: plan.newName,
+      newText,
     });
 
     if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
@@ -327,6 +440,8 @@ export async function handleRename(
   if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
     (deps as any).console.log(`[RENAME:RESULT] Total edits: ${Object.values(workspaceEdit.changes!).reduce((sum, edits) => sum + edits.length, 0)}`);
   }
+
+  await applyAliasPropagation(aliasChanges, service, deps, workspaceEdit);
 
   return workspaceEdit;
 }

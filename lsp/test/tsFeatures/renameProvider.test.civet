@@ -44,6 +44,20 @@ applyWorkspaceEdit := (original: string, doc: TextDocument, edits: any[]) ->
     result = result.slice(0, start) + edit.newText + result.slice(end)
   result
 
+captureRenameChanges := (label: string, result: any) ->
+  changes := result?.changes
+  if (!changes)
+    console.log(`[RENAME-TEST] ${label}: no changes returned`)
+    return
+  Object.entries(changes).forEach(([uri, edits]) ->
+    editCount := Array.isArray(edits) ? edits.length : 0
+    console.log(`[RENAME-TEST] ${label}: ${uri} edits=${editCount}`)
+    if (Array.isArray(edits))
+      edits.forEach((edit, idx) ->
+        console.log(`[RENAME-TEST]   [${idx}] range=${JSON.stringify(edit.range)} newText=${JSON.stringify(edit.newText)}`)
+      )
+  )
+
 synthDeps := (
   service: Awaited<ReturnType<typeof TSService>>,
   documents: Map<string, TextDocument>
@@ -169,9 +183,11 @@ describe "Rename Provider (F2) - Comprehensive", ->
       tsOffset := getTsOffset(doc, filePath, "greet", service)
       assert(tsOffset != null)
       result := await handleRename({ renameAnchor: { fileForTs: filePath + ".tsx", offset: tsOffset! }, newName: "say" }, synthDeps(service, documents))
-      assert(result?.changes?.[uri]?.length === 2)
+      changeCount := result?.changes?.[uri]?.length ?? 0
+      if (changeCount !== 2) captureRenameChanges("class method", result)
+      assert(changeCount === 2)
       updated := applyWorkspaceEdit(content, doc, result!.changes![uri]!)
-      assert(updated.includes("say: (name"))
+      assert(updated.includes("say(name"))
       assert(updated.includes("g.say("))
 
   describe "Cross-File", ->
@@ -195,6 +211,27 @@ describe "Rename Provider (F2) - Comprehensive", ->
       updatedImport := applyWorkspaceEdit(consumerContent, consumerDoc, result!.changes![consumerUri]!)
       assert(updatedImport.includes("renamedValue"))
 
+    it "renames imported usage with alias", async ->
+      sourceContent := fixtureContents.get('import-source.civet')!
+      consumerContent := fixtureContents.get('import-consumer.civet')!
+      sourcePath := path.join(FIXTURE_DIR, 'import-source.civet')
+      consumerPath := path.join(FIXTURE_DIR, 'import-consumer.civet')
+      sourceUri := makeUri(sourcePath)
+      consumerUri := makeUri(consumerPath)
+      sourceDoc := createCivetDoc(sourceUri, sourceContent)
+      consumerDoc := createCivetDoc(consumerUri, consumerContent)
+      documents.set(sourceUri, registerDoc(service, sourceDoc))
+      documents.set(consumerUri, registerDoc(service, consumerDoc))
+      tsOffset := getTsOffset(consumerDoc, consumerPath, "value", service, 1)
+      assert(tsOffset != null)
+      result := await handleRename({ renameAnchor: { fileForTs: consumerPath + ".tsx", offset: tsOffset! }, newName: "renamed" }, synthDeps(service, documents))
+      consumerChanges := result?.changes?.[consumerUri]?.length ?? 0
+      if (consumerChanges !== 2) captureRenameChanges("import alias", result)
+      assert(consumerChanges === 2)
+      updatedConsumer := applyWorkspaceEdit(consumerContent, consumerDoc, result!.changes![consumerUri]!)
+      assert(updatedConsumer.includes('import { value as renamed } from "./import-source.civet"'))
+      assert(updatedConsumer.includes("console.log renamed"))
+
     it "renames re-export chain", async ->
       baseContent := fixtureContents.get('reexport-base.civet')!
       reexportContent := fixtureContents.get('reexport-middle.civet')!
@@ -214,7 +251,9 @@ describe "Rename Provider (F2) - Comprehensive", ->
       tsOffset := getTsOffset(baseDoc, basePath, "original", service)
       assert(tsOffset != null)
       result := await handleRename({ renameAnchor: { fileForTs: basePath + ".tsx", offset: tsOffset! }, newName: "renamedOriginal" }, synthDeps(service, documents))
-      assert(result?.changes?.[userUri]?.length!)
+      userChanges := result?.changes?.[userUri]
+      if (!userChanges?.length) captureRenameChanges("re-export chain", result)
+      assert(userChanges?.length)
       updatedUser := applyWorkspaceEdit(userContent, userDoc, result!.changes![userUri]!)
       assert(updatedUser.includes("renamedOriginal"))
 
@@ -239,12 +278,14 @@ describe "Rename Provider (F2) - Comprehensive", ->
       uri := makeUri(filePath)
       doc := createCivetDoc(uri, content)
       documents.set(uri, registerDoc(service, doc))
-      tsOffset := getTsOffset(doc, filePath, "foo", service)
+      tsOffset := getTsOffset(doc, filePath, "foo", service, 1)
       assert(tsOffset != null)
       result := await handleRename({ renameAnchor: { fileForTs: filePath + ".tsx", offset: tsOffset! }, newName: "renamedFoo" }, synthDeps(service, documents))
-      assert(result?.changes?.[uri]?.length === 2)
+      destructureChanges := result?.changes?.[uri]?.length ?? 0
+      if (destructureChanges !== 2) captureRenameChanges("destructure", result)
+      assert(destructureChanges === 2)
       updated := applyWorkspaceEdit(content, doc, result!.changes![uri]!)
-      assert(updated.includes("{ renamedFoo, bar }"))
+      assert(updated.includes("{ foo: renamedFoo, bar }"))
       assert(updated.includes("renamedFoo + bar"))
 
   describe "Edge Cases", ->
@@ -327,13 +368,13 @@ describe "Rename Provider (F2) - Comprehensive", ->
       assert(result == null)
 
     it "handles parse error attempt gracefully", async ->
-      content := fixtureContents.get('fail-parse.civet')!
       filePath := path.join(FIXTURE_DIR, 'fail-parse.civet')
       uri := makeUri(filePath)
-      doc := createCivetDoc(uri, content)
+      invalidContent := "invalid := )"
+      doc := createCivetDoc(uri, invalidContent)
       documents.set(uri, registerDoc(service, doc))
       meta := service.host.getMeta(filePath)
-      assert(!meta?.transpiledDoc)
+      assert(meta?.parseErrors?.length)
       result := await handleRename({ renameAnchor: { fileForTs: filePath + ".tsx", offset: 0 }, newName: "noop" }, synthDeps(service, documents))
       assert(result == null)
 
