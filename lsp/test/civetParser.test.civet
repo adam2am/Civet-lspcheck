@@ -1,0 +1,294 @@
+import { describe, it } from "mocha"
+import assert from "assert"
+import {
+  findAllImports,
+  stripQuotes,
+  ensureLeadingDotSlash,
+  withOrWithoutExtension
+} from "../source/lib/civet-parser.mjs"
+
+describe "Civet Parser", ->
+  describe "stripQuotes", ->
+    it "removes double quotes", ->
+      result := stripQuotes('"hello"')
+      assert.strictEqual(result, 'hello')
+    
+    it "removes single quotes", ->
+      result := stripQuotes("'hello'")
+      assert.strictEqual(result, 'hello')
+    
+    it "returns unchanged string if no quotes", ->
+      result := stripQuotes('hello')
+      assert.strictEqual(result, 'hello')
+    
+    it "returns unchanged if mismatched quotes", ->
+      result := stripQuotes('"hello\'')
+      assert.strictEqual(result, '"hello\'')
+
+  describe "ensureLeadingDotSlash", ->
+    it "adds ./ for relative paths without prefix", ->
+      result := ensureLeadingDotSlash('file.civet')
+      assert.strictEqual(result, './file.civet')
+    
+    it "preserves existing ./", ->
+      result := ensureLeadingDotSlash('./file.civet')
+      assert.strictEqual(result, './file.civet')
+    
+    it "preserves existing ../", ->
+      result := ensureLeadingDotSlash('../file.civet')
+      assert.strictEqual(result, '../file.civet')
+    
+    it "preserves absolute paths", ->
+      result := ensureLeadingDotSlash('/file.civet')
+      assert.strictEqual(result, '/file.civet')
+
+  describe "withOrWithoutExtension", ->
+    it "preserves extension if source has one", ->
+      result := withOrWithoutExtension('./file.js', './original.ts')
+      assert.strictEqual(result, './file.js')
+    
+    it "removes extension if source has none", ->
+      result := withOrWithoutExtension('./file.ts', './original')
+      assert.strictEqual(result, './file')
+    
+    it "handles complex paths", ->
+      result := withOrWithoutExtension('../../lib/utils.ts', '../../lib/utils')
+      assert.strictEqual(result, '../../lib/utils')
+
+  describe "findAllImports - Named Imports", ->
+    it "finds simple named import", ->
+      code := 'import { x } from "./file.civet"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './file.civet')
+      assert.strictEqual(results[0].type, 'from')
+    
+    it "finds import with multiple specifiers", ->
+      code := 'import { x, y, z } from "./module"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './module')
+    
+    it "finds import with type-only", ->
+      code := 'import type { MyType } from "./types"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './types')
+      assert.strictEqual(results[0].type, 'from')
+    
+    it "finds default import", ->
+      code := 'import Component from "./Component"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './Component')
+
+  describe "findAllImports - Side-Effect Imports", ->
+    it "finds side-effect import", ->
+      code := 'import "./styles.css"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './styles.css')
+      assert.strictEqual(results[0].type, 'side-effect')
+    
+    it "finds side-effect with type keyword", ->
+      code := 'import type "./polyfill"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './polyfill')
+      assert.strictEqual(results[0].type, 'side-effect')
+
+  describe "findAllImports - Named Exports", ->
+    it "finds named export", ->
+      code := 'export { foo } from "./module"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './module')
+      assert.strictEqual(results[0].type, 'from')
+    
+    it "finds export with renaming", ->
+      code := 'export { x as y, z } from "./lib"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './lib')
+    
+    it "finds namespace export", ->
+      code := 'export * from "./namespace"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './namespace')
+      assert.strictEqual(results[0].type, 'from')
+
+  describe "findAllImports - Type Exports", ->
+    it "finds type export", ->
+      code := 'export type { MyType } from "./types"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './types')
+      assert.strictEqual(results[0].type, 'from')
+    
+    it "finds type namespace export", ->
+      code := 'export type * from "./type-defs"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './type-defs')
+
+  describe "findAllImports - Side-Effect Exports", ->
+    it "finds side-effect export", ->
+      code := 'export "./side-effects"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './side-effects')
+      assert.strictEqual(results[0].type, 'side-effect')
+
+  describe "findAllImports - Multiline and Comments", ->
+    it "handles multiline import", ->
+      code := """
+        import {
+          x,
+          y,
+          z
+        } from "./multi"
+        """
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './multi')
+    
+    it "handles line comments before import", ->
+      code := """
+        // This is a comment
+        import { foo } from "./commented"
+        """
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './commented')
+    
+    it "handles block comments in import", ->
+      code := """
+        import {
+          /* comment */ x
+        } from "./block-comment"
+        """
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './block-comment')
+    
+    it "ignores false positives in comments", ->
+      code := '// import { fake } from "./not-real"\nimport { real } from "./actual"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 1)
+      assert.strictEqual(results[0].spec, './actual')
+
+  describe "findAllImports - Quote Preservation", ->
+    it "handles double quotes", ->
+      code := 'import x from "./file"'
+      results := findAllImports(code)
+      assert.strictEqual(results[0].spec, './file')
+    
+    it "handles single quotes", ->
+      code := "import x from './file'"
+      results := findAllImports(code)
+      assert.strictEqual(results[0].spec, './file')
+    
+    it "preserves offset and length for editing", ->
+      code := 'import { x } from "./module.civet"'
+      results := findAllImports(code)
+      match := results[0]
+      // Extract the full quoted string using offset and length
+      extracted := code.substring(match.offset, match.offset + match.length)
+      assert.strictEqual(extracted, '"./module.civet"')
+
+  describe "findAllImports - Multiple Statements", ->
+    it "finds multiple imports and exports", ->
+      code := """
+        import { a } from "./a"
+        export { b } from "./b"
+        import type { C } from "./c"
+        export type { D } from "./d"
+        """
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 4)
+      assert.strictEqual(results[0].spec, './a')
+      assert.strictEqual(results[1].spec, './b')
+      assert.strictEqual(results[2].spec, './c')
+      assert.strictEqual(results[3].spec, './d')
+    
+    it "finds side-effects mixed with named imports", ->
+      code := """
+        import "./reset.css"
+        import { util } from "./helpers"
+        """
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 2)
+      assert.strictEqual(results[0].type, 'side-effect')
+      assert.strictEqual(results[1].type, 'from')
+
+  describe "findAllImports - Edge Cases", ->
+    it "ignores 'import' inside strings", ->
+      code := 'const msg = "import from nothing"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 0)
+    
+    it "ignores 'export' inside strings", ->
+      code := 'const msg = "export { x }"'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 0)
+    
+    it "ignores keywords with word characters attached", ->
+      code := 'imported_function(); exported_var;'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 0)
+    
+    it "handles empty source", ->
+      results := findAllImports('')
+      assert.strictEqual(results.length, 0)
+    
+    it "handles statements without from clause (local exports)", ->
+      code := 'export { x }; export const y = 1;'
+      results := findAllImports(code)
+      assert.strictEqual(results.length, 0)
+
+    it 'should ignore imports in template literals', ->
+      code := 'const spec = `import { fake } from "./file.civet"`'
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)
+
+    it 'should ignore exports in template literals', ->
+      code := 'const code = `export { fake } from "./module.civet"`'
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)
+
+    it 'should ignore multiline template literals', ->
+      code := 'const msg = `
+        import { fake } from "./commented.civet"
+        export { also-fake } from "./comment2.civet"
+      `'
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)
+
+    it 'handles mixed real imports and template literal imports', ->
+      code := '
+      const template = `import { fake } from "./file.civet"`
+      import { real } from "./actual.civet"
+      '
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './actual.civet')
+
+    it 'handles nested template literals with import keywords', ->
+      code := 'const nested = `outer text`'
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)
+
+    it 'handles escaped backticks in template literals', ->
+      code := 'const escaped = `literal with backtick`'
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)
+
+    it 'real import after template literal with import keyword', ->
+      code := '
+      const tpl = `import fake from "./nope"`
+      import { real } from "./yes.civet"
+      '
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './yes.civet')

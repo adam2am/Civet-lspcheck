@@ -1,0 +1,199 @@
+import { describe, it } from "mocha"
+import assert from "assert"
+import { findAllImports } from "../source/lib/civet-parser.mjs"
+
+/**
+ * Tests for dependency graph integration with the enhanced parser.
+ * These tests verify that the parser correctly identifies all import/export variants
+ * that should be tracked in the project's dependency graph.
+ */
+
+describe "Dependency Graph Integration - Parser Coverage", ->
+  describe "Import Dependencies", ->
+    it "tracks named import as dependency", ->
+      content := 'import { helper } from "./utils"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './utils')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "tracks type import as dependency", ->
+      content := 'import type { UserType } from "./types"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './types')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "tracks side-effect import as dependency", ->
+      content := 'import "./polyfill"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './polyfill')
+      assert.strictEqual(imports[0].type, 'side-effect')
+
+  describe "Export Dependencies (Re-exports)", ->
+    it "tracks named re-export as dependency", ->
+      content := 'export { x, y } from "./module"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './module')
+      // Re-export creates a dependency on the source module
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "tracks namespace re-export as dependency", ->
+      content := 'export * from "./all"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './all')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "tracks type re-export as dependency", ->
+      content := 'export type * from "./type-defs"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './type-defs')
+      assert.strictEqual(imports[0].type, 'from')
+    
+    it "tracks side-effect export as dependency", ->
+      content := 'export "./init"'
+      imports := findAllImports(content)
+      
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './init')
+      assert.strictEqual(imports[0].type, 'side-effect')
+
+  describe "Multiple Dependencies in Single File", ->
+    it "tracks all mixed import and export dependencies", ->
+      content := """
+        import { a } from "./a"
+        import type { B } from "./b"
+        import "./side-effect"
+        export { x } from "./x-source"
+        export type { Y } from "./y-source"
+        export * from "./star-source"
+        export "./another-side-effect"
+        """
+      imports := findAllImports(content)
+      
+      // Should find 7 dependency specifiers
+      assert.strictEqual(imports.length, 7)
+      
+      specs := imports.map((m) => m.spec)
+      assert.ok(specs.includes('./a'))
+      assert.ok(specs.includes('./b'))
+      assert.ok(specs.includes('./side-effect'))
+      assert.ok(specs.includes('./x-source'))
+      assert.ok(specs.includes('./y-source'))
+      assert.ok(specs.includes('./star-source'))
+      assert.ok(specs.includes('./another-side-effect'))
+      
+      // Verify correct type classification
+      sideEffects := imports.filter((m) => m.type === 'side-effect')
+      assert.strictEqual(sideEffects.length, 2)
+
+  describe "Transitive Dependency Chains", ->
+    it "correctly identifies file A -> file B -> file C dependencies", ->
+      // Simulating: 
+      // - a.civet imports from b.civet
+      // - b.civet re-exports from c.civet
+      // Both should be tracked as separate dependencies
+      
+      fileA := 'import { util } from "./b"'
+      fileB := 'export { helper } from "./c"'
+      
+      importsA := findAllImports(fileA)
+      importsB := findAllImports(fileB)
+      
+      assert.strictEqual(importsA.length, 1)
+      assert.strictEqual(importsA[0].spec, './b')
+      
+      assert.strictEqual(importsB.length, 1)
+      assert.strictEqual(importsB[0].spec, './c')
+      
+      // A depends on B, B depends on C
+      // The dependency graph would show A -> B and B -> C
+
+  describe "Dependency Types for Graph Building", ->
+    it "correctly classifies 'from' dependencies for graph traversal", ->
+      // 'from' dependencies create explicit edges in the dependency graph
+      code := """
+        import { x } from "./module"
+        export { y } from "./re-export-src"
+        """
+      imports := findAllImports(code)
+      
+      fromDeps := imports.filter((m) => m.type === 'from')
+      assert.strictEqual(fromDeps.length, 2)
+    
+    it "correctly classifies side-effect dependencies", ->
+      // Side-effect dependencies also create edges (important for execution order)
+      code := """
+        import "./init"
+        export "./setup"
+        """
+      imports := findAllImports(code)
+      
+      sideEffectDeps := imports.filter((m) => m.type === 'side-effect')
+      assert.strictEqual(sideEffectDeps.length, 2)
+
+  describe "Relative Path Resolution in Dependency Graph", ->
+    it "preserves relative path specs for later resolution", ->
+      // The parser preserves raw specs; the graph resolver handles path resolution
+      code := """
+        import { a } from "./sub/module"
+        export { b } from "../sibling"
+        import { c } from "../../ancestor"
+        """
+      imports := findAllImports(code)
+      
+      assert.strictEqual(imports.length, 3)
+      assert.strictEqual(imports[0].spec, './sub/module')
+      assert.strictEqual(imports[1].spec, '../sibling')
+      assert.strictEqual(imports[2].spec, '../../ancestor')
+
+  describe "Extension Preservation for Dependency Resolution", ->
+    it "preserves .civet extensions in specs for tracking", ->
+      code := 'import { x } from "./module.civet"'
+      imports := findAllImports(code)
+      
+      // Parser keeps the original spec with extension
+      assert.strictEqual(imports[0].spec, './module.civet')
+    
+    it "preserves specs without extensions", ->
+      code := 'import { x } from "./module"'
+      imports := findAllImports(code)
+      
+      assert.strictEqual(imports[0].spec, './module')
+
+  describe "Edge Cases in Dependency Tracking", ->
+    it "ignores local exports without dependencies", ->
+      code := 'export { x }'
+      imports := findAllImports(code)
+      
+      // Local exports don't create dependencies
+      assert.strictEqual(imports.length, 0)
+    
+    it "ignores import/export in comments", ->
+      code := '// import { x } from "./fake"\n/* export { y } from "./also-fake" */\nimport { real } from "./actual"'
+      imports := findAllImports(code)
+      
+      // Only the real import should be found
+      assert.strictEqual(imports.length, 1)
+      assert.strictEqual(imports[0].spec, './actual')
+    
+    it "ignores import/export in string literals", ->
+      code := '''const spec = "import { x } from './file'"'''
+      imports := findAllImports(code)
+      
+      assert.strictEqual(imports.length, 0)
+
+    it 'ignores template literal exports in string literals', ->
+      code := `const code = \`export { fake } from "./module.civet"\``
+      imports := findAllImports(code)
+      assert.strictEqual(imports.length, 0)

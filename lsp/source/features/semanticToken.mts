@@ -181,6 +181,7 @@ import {
   
       const builder = new SemanticTokensBuilder()
       addSemanticTokensFromTs(builder, service, transpiledPath, tsDoc, sourcemapLines, civetDoc, range)
+      
       const result = builder.build()
       if (SEM_DEBUG) console.log(`🔍 SEMANTIC-TOKENS result token count: ${result.data.length / 5} for ${isPlainTs ? 'TS' : 'civet'}`)
       return result
@@ -601,7 +602,7 @@ import {
           break
         }
       } catch (e) {
-        console.warn(`🔍 SEM-PROVIDER: Provider ${provider.name} failed`, e)
+        if (SEM_DEBUG) console.warn(`🔍 SEM-PROVIDER: Provider ${provider.name} failed`, e)
       }
     }
     perfTimings.provider = performance.now() - providerStart
@@ -684,7 +685,7 @@ import {
       // Apply smart refinement only where needed (unless disabled by feature flag)
       let refined: number | undefined;
       if (!REFINEMENT_DISABLED) {
-      const refinementStart = performance.now()
+        const refinementStart = performance.now()
         refined = refineTokenTypeWithRules(
         tokenType,
         checker,
@@ -759,7 +760,8 @@ import {
       console.log(`  ⚙️  Processing: ${perfTimings.processing.toFixed(2)}ms (${(perfTimings.processing/perfTimings.total*100).toFixed(1)}%)`)
       if (REFINEMENT_DISABLED) {
         console.log(`    🔧 Refinement: DISABLED (trusting TS Service completely)`)
-      } else {
+      } 
+      else {
         const refinementPct = perfTimings.processing > 0 ? (perfTimings.refinement/perfTimings.processing*100).toFixed(1) : '0.0'
         console.log(`    🔧 Refinement: ${perfTimings.refinement.toFixed(2)}ms of processing (${refinementPct}%, ${refinementCalls} calls, ${refinementHits} hits)`)
       }

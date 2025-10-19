@@ -1,9 +1,16 @@
 /**
- * Civet Import Parser
+ * Civet Import/Export Parser
  * 
- * This module provides utilities for parsing Civet import statements.
- * It centralizes the logic for understanding Civet import syntax to avoid
- * duplication across different features that need to analyze imports.
+ * This module provides utilities for parsing Civet import and export statements.
+ * It centralizes the logic for understanding Civet import/export syntax to avoid
+ * duplication across different features that need to analyze imports and exports.
+ * 
+ * Uses a single-pass state machine to robustly handle:
+ * - import/export statements
+ * - type-only imports/exports
+ * - re-exports (export { x } from '...')
+ * - side-effect imports (import './file')
+ * - multiline statements with comments
  */
 
 export interface ImportMatch {
@@ -14,31 +21,162 @@ export interface ImportMatch {
 }
 
 /**
- * A simple, fast, and robust state-machine parser to find all import specifiers in a Civet file.
- * It correctly handles multiline imports, comments, and strings without the fragility of regex or the overhead of a full AST parse.
+ * Validates that a keyword is a real import/export keyword (not part of another word)
+ */
+function isRealKeyword(content: string, index: number, keyword: string): boolean {
+  if (index > 0 && /\w/.test(content[index - 1])) return false;
+  const nextChar = content[index + keyword.length];
+  return !nextChar || !/\w/.test(nextChar);
+}
+
+/**
+ * Utility function to strip quotes from a string
+ */
+export function stripQuotes(text: string): string {
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+/**
+ * Check if a position is inside a comment or string literal at the top level
+ */
+function isInCommentOrString(content: string, pos: number): boolean {
+  let inString: '"' | "'" | '`' | null = null;
+  let escapeNext = false;
+  let i = 0;
+
+  while (i < pos && i < content.length) {
+    // Handle escape sequences in strings
+    if (inString && escapeNext) {
+      escapeNext = false;
+      i++;
+      continue;
+    }
+
+    if (inString) {
+      if (content[i] === '\\') {
+        escapeNext = true;
+        i++;
+        continue;
+      }
+      if (content[i] === inString) {
+        inString = null;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    // Enter string or template literal
+    if (content[i] === '"' || content[i] === "'" || content[i] === '`') {
+      inString = content[i] as '"' | "'" | '`';
+      i++;
+      continue;
+    }
+
+    // Handle line comments - skip to end of line or end of input
+    if (content[i] === '/' && content[i + 1] === '/') {
+      // If pos is after this point and before the newline, it's in a comment
+      const newlinePos = content.indexOf('\n', i);
+      if (newlinePos === -1 || pos < newlinePos) {
+        // pos is before the newline (or there is no newline), so it's in the comment
+        return true;
+      }
+      // Skip to after the newline
+      i = newlinePos + 1;
+      continue;
+    }
+
+    // Handle block comments - skip until */
+    if (content[i] === '/' && content[i + 1] === '*') {
+      const endComment = content.indexOf('*/', i + 2);
+      if (endComment === -1 || pos < endComment + 2) {
+        // pos is before the end of comment (or comment doesn't end)
+        return true;
+      }
+      // Skip past the comment
+      i = endComment + 2;
+      continue;
+    }
+
+    i++;
+  }
+
+  return inString !== null;
+}
+
+/**
+ * A robust single-pass state-machine parser to find all import/export specifiers in a Civet file.
+ * Handles both import and export statements including re-exports and type-only exports.
+ * 
+ * Supported patterns:
+ * - import { x } from './file.civet'
+ * - import type { x } from './file.civet'
+ * - import './file.civet' (side-effect)
+ * - export { x } from './file.civet' (re-exports)
+ * - export * from './file.civet' (namespace re-exports)
+ * - export type { x } from './file.civet' (type re-exports)
+ * - export './file.civet' (side-effect export)
  */
 export function findAllImports(content: string): ImportMatch[] {
   const results: ImportMatch[] = [];
-  const importRegex = /import/g;
-  let match;
+  let i = 0;
 
-  while ((match = importRegex.exec(content))) {
-    let i = match.index;
+  while (i < content.length) {
+    // Find next 'import' or 'export' keyword
+    const importIdx = content.indexOf('import', i);
+    const exportIdx = content.indexOf('export', i);
+    
+    let keywordIdx = -1;
+    let keyword = '';
+    
+    if (importIdx !== -1 && exportIdx !== -1) {
+      // Both found, take the earlier one
+      if (importIdx < exportIdx) {
+        keywordIdx = importIdx;
+        keyword = 'import';
+      } else {
+        keywordIdx = exportIdx;
+        keyword = 'export';
+      }
+    } else if (importIdx !== -1) {
+      keywordIdx = importIdx;
+      keyword = 'import';
+    } else if (exportIdx !== -1) {
+      keywordIdx = exportIdx;
+      keyword = 'export';
+    } else {
+      break; // No more keywords found
+    }
 
-    // Check if it's a real 'import' keyword
-    if (i > 0 && /\w/.test(content[i - 1])) continue;
-    i += 6; // Move past 'import'
-    const nextChar = content[i];
-    if (nextChar && /\w/.test(nextChar)) continue;
+    // Validate it's a real keyword and not in a comment or string
+    if (!isRealKeyword(content, keywordIdx, keyword) || isInCommentOrString(content, keywordIdx)) {
+      i = keywordIdx + 1;
+      continue;
+    }
 
-    let inString: '"' | "'" | null = null;
+    i = keywordIdx + keyword.length;
+    
+    // Skip whitespace after keyword
+    while (i < content.length && /\s/.test(content[i])) i++;
+    
+    // Check for 'type' keyword (for type-only imports/exports)
+    if (content.substring(i, i + 4) === 'type') {
+      i += 4; // Move past 'type'
+      // Skip whitespace after 'type'
+      while (i < content.length && /\s/.test(content[i])) i++;
+    }
+
     let braceLevel = 0;
     let foundFrom = false;
     let potentialSideEffect = true;
 
-    // Scan forward from the import keyword
+    // Scan forward from the keyword
     while (i < content.length) {
-      let char = content[i];
+      const char = content[i];
 
       // Skip whitespace
       if (/\s/.test(char)) {
@@ -82,48 +220,40 @@ export function findAllImports(content: string): ImportMatch[] {
         }
       }
 
-      // Found the specifier
-      if (char === "'" || char === '"' || (braceLevel === 0 && content.substring(i, i+2) === './') || (braceLevel === 0 && content.substring(i,i+3) === '../')) {
-        let spec;
-        let specOffset;
-        let specLength;
-        
-        if (char === "'" || char === '"') {
-          inString = char;
-          specOffset = i;
-          const specStart = i + 1;
-          let specEnd = specStart;
-          while (specEnd < content.length && content[specEnd] !== inString) specEnd++;
-          spec = content.substring(specStart, specEnd);
-          specLength = (specEnd - specStart) + 2;
-          i = specEnd + 1;
-        } else {
-          // Unquoted spec
-          // This is more robust than a simple regex. We scan until we hit a character
-          // that is unambiguously not part of a path. This handles parens, etc.
-          specOffset = i;
-          let specEnd = i;
-          while (specEnd < content.length && !/[\s;(){}\[\]]/.test(content[specEnd])) {
-            specEnd++;
-          }
-          spec = content.substring(i, specEnd);
-          specLength = specEnd - i;
-          i = specEnd;
+      // Handle asterisk for namespace exports/imports (e.g., export * from '...' or import * as ...)
+      if (char === '*') {
+        potentialSideEffect = false;
+        i++;
+        continue;
+      }
+
+      // Found the specifier (quoted string)
+      if (char === "'" || char === '"') {
+        const stringChar = char;
+        const specOffset = i;
+        const specStart = i + 1;
+        let specEnd = specStart;
+        while (specEnd < content.length && content[specEnd] !== stringChar) {
+          if (content[specEnd] === '\\') specEnd++; // Skip escaped characters
+          specEnd++;
         }
+        const spec = content.substring(specStart, specEnd);
+        const specLength = (specEnd - specStart) + 2;
+        i = specEnd + 1;
         
         const type = foundFrom ? 'from' : (potentialSideEffect ? 'side-effect' : 'from');
         results.push({ spec, offset: specOffset, length: specLength, type });
-        break; // Move to next import match
+        break; // Move to next keyword match
       }
       
       // If we see a character that isn't the start of a specifier and isn't a brace,
-      // it's likely a named import, so it's not a side-effect.
+      // it's likely a named import/export, so it's not a side-effect.
       if (/\w/.test(char)) {
-          potentialSideEffect = false;
+        potentialSideEffect = false;
       }
 
       if (char === ';' || char === '\n') {
-        break; // End of statement, move to next import match
+        break; // End of statement, move to next keyword match
       }
       
       i++;
@@ -131,16 +261,6 @@ export function findAllImports(content: string): ImportMatch[] {
   }
 
   return results;
-}
-
-/**
- * Utility function to strip quotes from a string
- */
-export function stripQuotes(text: string): string {
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-    return text.slice(1, -1);
-  }
-  return text;
 }
 
 /**
