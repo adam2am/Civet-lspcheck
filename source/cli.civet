@@ -104,9 +104,6 @@ export function parseArgs(args: string[], isTTY = process.stdin.isTTY): Promise<
           parse `civet ${args[++i]}`,
             startRule: 'CivetPrologueContent'
             filename: '--civet argument'
-            events: // remove cache in case we've compiled Civet before
-              enter: undefined
-              exit: undefined
           |> .config
       when '--comptime'
         (options.parseOptions ??= {}).comptime = true
@@ -222,7 +219,7 @@ function readFiles(filenames: string[], evalString?: string): AsyncGenerator<Rea
           // For piped stdin, read stdin directly to avoid potential echo.
           content = (chunk for await chunk of process.stdin).join ''
       else
-        content = await fs.readFile filename, {encoding}
+        content = await fs.readFile filename
       yield {filename, content, stdin}
     catch error
       yield {filename, error, stdin}
@@ -567,7 +564,7 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
         child := fork filename, [
           ...scriptArgs
         ], {
-          execArgv,
+          execArgv
           stdio: 'inherit'
         }
         child.on 'exit', (code) =>
@@ -576,6 +573,10 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
             await fs.unlink filename
 
           process.exit code ?? 1
+        // Instead of default behavior of exiting, pass on signals to
+        // child process and let it decide whether to exit
+        for signal of ['SIGINT', 'SIGTERM', 'SIGHUP']
+          process.on signal, => child.kill signal
 
       else
         await import '../register.js'

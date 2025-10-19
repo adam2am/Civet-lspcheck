@@ -158,6 +158,15 @@ Object.defineProperties(state, {
   },
 })
 
+function setOperatorBehavior(name, behavior) {
+  const existing = state.operators.get(name)
+  if (existing && behavior) { // merge behaviors
+    state.operators.set(name, {...existing, ...behavior})
+  } else { // no merge, in particular double undefined -> undefined
+    state.operators.set(name, behavior || existing)
+  }
+}
+
 export function getStateKey() {
   const stateInt =
     ((state.currentIndent.level % 256) << 8) |
@@ -1494,9 +1503,9 @@ CallExpression
       children: [$1, ...$2, ...rest.flat()],
     })
   # Import declaration as an expression
-  Import _ NamedImports __ FromClause ->
+  Import _ DynamicImportContents __ FromClause ->
     return dynamizeImportDeclarationExpression($0)
-  FromClause:from __:fws Import:i _:iws NamedImports:imports ->
+  FromClause:from __:fws Import:i _:iws DynamicImportContents:imports ->
     return dynamizeImportDeclarationExpression([i, iws, imports, fws, from])
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
@@ -2565,13 +2574,13 @@ FunctionExpression
 OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
-    decl.names.forEach((name) => state.operators.set(name, behavior))
+    decl.names.forEach((name) => setOperatorBehavior(name, behavior))
     if (behavior?.error) decl = prepend(behavior.error, decl)
     decl = prepend(trimFirstSpace(w), decl)
     return decl
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
-    state.operators.set(signature.id.name, signature.behavior)
+    setOperatorBehavior(signature.id.name, signature.behavior)
     return {
       ...signature,
       type: "FunctionExpression",
@@ -2583,10 +2592,10 @@ OperatorDeclaration
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
     const children = []
-    state.operators.set(id.name, behavior)
+    setOperatorBehavior(id.name, behavior)
     if (behavior?.error) children.push(behavior.error)
     ids.forEach(([, , id2, behavior2]) => {
-      state.operators.set(id2.name, behavior2)
+      setOperatorBehavior(id2.name, behavior2)
       if (behavior2?.error) children.push(behavior2.error)
     })
     return {
@@ -3967,6 +3976,7 @@ MethodDefinition
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _?:ws &ClassElementName ->
+    if (!ws) ws = " "
     return {
       // no async or generator, because getters and setters can't be
       modifier: {
@@ -5724,7 +5734,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5760,7 +5770,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5839,6 +5849,21 @@ OperatorNamedImports
       specifiers,
     }
 
+# Allows { default, "foo bar" } because dynamic imports allow them;
+# forbids { type foo } because dynamic imports don't allow them
+DynamicNamedImports
+  OpenBrace DynamicImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
+    return {
+      type: "Declaration",
+      children: $0,
+      specifiers,
+    }
+
+DynamicImportContents
+  DynamicNamedImports
+  IdentifierName
+  Star
+
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier:module ->
@@ -5861,15 +5886,15 @@ ImportAssertion
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
-  ( __ TypeKeyword )? ImportSpecifier ->
-    if (!$1) return $2
-    return { ts: true, children: $0, binding: $2.binding }
+  __ TypeKeyword ImportSpecifier ->
+    return { ts: true, children: $0, binding: $3.binding }
+  ImportSpecifier
   # `operator id` blesses `id` as operator; doesn't make sense with `type`
   __:ws Operator OperatorImportSpecifier:spec ->
     if (spec.binding.type !== "Identifier") {
       throw new Error("Expected identifier after `operator`")
     }
-    state.operators.set(spec.binding.name, spec.behavior)
+    setOperatorBehavior(spec.binding.name, spec.behavior)
     return {
       ...spec,
       children: [
@@ -5906,6 +5931,19 @@ OperatorImportSpecifier
       behavior,
       children: [$1, $2, $3?.error, $4],
     }
+
+DynamicImportSpecifier
+  __ ( TypeKeyword __ &DynamicModuleExportName )?:ts DynamicModuleExportName:source ( ImportAsToken __ DynamicModuleExportName )?:binding ObjectPropertyDelimiter ->
+    return {
+      source,
+      binding: binding?.[2],
+      ts: !!ts, // true causes an error later
+      children: $0,
+    }
+
+DynamicModuleExportName
+  ModuleExportName
+  ComputedPropertyName
 
 ImportAsToken
   __ As
@@ -6918,7 +6956,7 @@ SingleQuote
 
 Star
   "*" ->
-    return { $loc, token: $1 }
+    return { $loc, token: $1, type: "Star" }
 
 Static
   "static" NonIdContinue ->
@@ -8782,6 +8820,7 @@ CivetOption
         break
       case "globals":
       case "symbols":
+      case "operators":
         value = value.split(',').filter(Boolean)
         break
     }
@@ -9109,6 +9148,40 @@ Reset
           "jsxCodeSameLine",
         ]) {
           config[option] = b
+        }
+      }
+    })
+
+    // `operators` can be an array of operator names (strings), or
+    // an object mapping operator names to their behaviors as a parsable string
+    // or OperatorBehavior object.
+    Object.defineProperty(config, "operators", {
+      set(o) {
+        if (!o) return
+        if (typeof o !== "object") {
+          throw new Error("operators configuration must be an object or array")
+        }
+        if (Array.isArray(o)) {
+          o.forEach(name => {
+            if (typeof name !== "string") {
+              throw new Error("operators configuration array must contain only strings")
+            }
+            setOperatorBehavior(name, undefined) // default behavior
+          })
+        } else {
+          for (let [name, behavior] of Object.entries(o)) {
+            if (typeof behavior === "string") {
+              behavior = behavior.trim()
+              behavior = behavior ? parse(behavior, {
+                startRule: "OperatorBehavior",
+                filename: `operator config for ${name}`,
+              }) : undefined
+            }
+            if (behavior && typeof behavior !== "object") {
+              throw new Error("operators configuration object must have string or object values")
+            }
+            setOperatorBehavior(name, behavior)
+          }
         }
       }
     })
