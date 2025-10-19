@@ -1,0 +1,3 @@
+import { original } from "./reexport-middle.civet"
+foo := original
+

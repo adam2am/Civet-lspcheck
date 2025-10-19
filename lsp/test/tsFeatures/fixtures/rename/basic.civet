@@ -1,0 +1,4 @@
+oldName := 42
+console.log oldName
+sum := oldName + 1
+

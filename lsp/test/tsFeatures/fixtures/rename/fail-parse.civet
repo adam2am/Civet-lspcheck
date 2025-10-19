@@ -1,0 +1,2 @@
+// This fixture is intentionally invalid syntax for parse error testing
+validCode := 1

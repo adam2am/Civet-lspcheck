@@ -222,22 +222,31 @@ export async function computeRenameEdits(
 export async function handleRename(
   plan: { renameAnchor: { fileForTs: string, offset: number }, newName: string },
   deps: FeatureDeps
-) {
+): Promise<WorkspaceEdit | null> {
   const { ensureServiceForSourcePath } = deps;
-  if (debugSettings.rename) (deps as any).console.log(`[RENAME] handleRename called for ${plan.renameAnchor.fileForTs}`);
+  
+  if (debugSettings.rename && (deps as any).console?.log) (deps as any).console.log(`[RENAME] handleRename called for ${plan.renameAnchor.fileForTs}`);
   const service = await ensureServiceForSourcePath(plan.renameAnchor.fileForTs);
   if (!service) return null;
 
-  const edits = service.findRenameLocations(
-    plan.renameAnchor.fileForTs,
-    plan.renameAnchor.offset,
-    false,
-    false,
-    { providePrefixAndSuffixTextForRename: true }
-  );
+  let edits;
+  try {
+    edits = service.findRenameLocations(
+      plan.renameAnchor.fileForTs,
+      plan.renameAnchor.offset,
+      false,
+      false,
+      { providePrefixAndSuffixTextForRename: true }
+    );
+  } catch (error) {
+    if (debugSettings.rename && (deps as any).console?.log) {
+      (deps as any).console.log(`[RENAME] Error finding rename locations: ${error}`);
+    }
+    return null;
+  }
 
   if (!edits) {
-    if (debugSettings.rename) (deps as any).console.log(`[RENAME] No rename locations found.`);
+    if (debugSettings.rename && (deps as any).console?.log) (deps as any).console.log(`[RENAME] No rename locations found.`);
     return null;
   }
 
@@ -257,19 +266,66 @@ export async function handleRename(
       workspaceEdit.changes![uri] = [];
     }
 
+    const doc = (deps as any).documents.get(uri);
+    if (!doc) {
+      if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) (deps as any).console.log(`[RENAME:WARN] Document not found for URI: ${uri}`);
+      continue;
+    }
+
     let start = sourceFile.getLineAndCharacterOfPosition(edit.textSpan.start);
     let end = sourceFile.getLineAndCharacterOfPosition(edit.textSpan.start + edit.textSpan.length);
 
+    // Log before remapping if debug is on
+    if (debugSettings.renameLogging?.logRanges && (deps as any).console?.log) {
+      (deps as any).console.log(`[RENAME:RANGE-TS] fileName=${edit.fileName} start=${JSON.stringify(start)} end=${JSON.stringify(end)}`);
+    }
+
     const meta = service.host.getMeta(rawSourceName);
     if (meta?.sourcemapLines) {
+      // Trust remapped start position; discard TS-based end and recompute from source
       start = (deps as any).remapPosition(start, meta.sourcemapLines);
-      end = (deps as any).remapPosition(end, meta.sourcemapLines);
+
+      const originalDocText = doc.getText();
+      const originalStartOffset = doc.offsetAt(start);
+
+      // Advance past any leading whitespace
+      let tokenStartOffset = originalStartOffset;
+      while (tokenStartOffset < originalDocText.length && /\s/.test(originalDocText[tokenStartOffset])) {
+        tokenStartOffset++;
+      }
+
+      // Scan forward over identifier characters (Unicode-aware: letters, numbers, $, _)
+      let tokenEndOffset = tokenStartOffset;
+      while (tokenEndOffset < originalDocText.length) {
+        const ch = originalDocText[tokenEndOffset];
+        // Match valid JavaScript identifier continuation characters
+        if (!/[\p{L}\p{Nl}\p{Mn}\p{Mc}\p{Nd}\p{Pc}_$]/u.test(ch)) break;
+        tokenEndOffset++;
+      }
+
+      // If no token characters found, skip this edit
+      if (tokenStartOffset === tokenEndOffset) continue;
+
+      start = doc.positionAt(tokenStartOffset);
+      end = doc.positionAt(tokenEndOffset);
+      
+      if (debugSettings.renameLogging?.logMappings && (deps as any).console?.log) {
+        (deps as any).console.log(`[RENAME:MAP] remapped to start=${JSON.stringify(start)} end=${JSON.stringify(end)}`);
+      }
     }
 
     workspaceEdit.changes![uri].push({
       range: { start, end },
       newText: plan.newName,
     });
+
+    if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+      (deps as any).console.log(`[RENAME:EDIT] uri=${uri} range=[${start.line}:${start.character}-${end.line}:${end.character}] newText="${plan.newName}"`);
+    }
+  }
+
+  if (debugSettings.renameLogging?.logEdits && (deps as any).console?.log) {
+    (deps as any).console.log(`[RENAME:RESULT] Total edits: ${Object.values(workspaceEdit.changes!).reduce((sum, edits) => sum + edits.length, 0)}`);
   }
 
   return workspaceEdit;

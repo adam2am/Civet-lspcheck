@@ -1,0 +1,4 @@
+name := "😀"
+formatter := (name) -> name + "!"
+result := formatter(name)
+

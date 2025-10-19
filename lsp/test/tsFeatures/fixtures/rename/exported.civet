@@ -1,0 +1,3 @@
+export myFunc := (x) -> x * 2
+y := myFunc(5)
+

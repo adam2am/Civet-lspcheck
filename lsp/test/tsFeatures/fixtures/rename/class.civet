@@ -1,0 +1,8 @@
+class MyClass
+  value: number
+  constructor(x)
+    @value = x
+  getValue()
+    @value
+instance := new MyClass(1)
+result := instance.getValue()

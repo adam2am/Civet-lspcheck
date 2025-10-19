@@ -1,0 +1,3 @@
+import { value } from "./import-source.civet"
+console.log value
+

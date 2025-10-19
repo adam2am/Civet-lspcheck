@@ -1,0 +1,7 @@
+longFn := (
+  a,
+  b
+) ->
+  a + b
+result := longFn(1, 2)
+

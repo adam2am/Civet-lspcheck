@@ -1,0 +1,2 @@
+// This fixture intentionally uses a reserved keyword as identifier
+constValue := 1

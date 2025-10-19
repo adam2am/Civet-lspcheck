@@ -1,0 +1,5 @@
+class Greeter
+  greet(name)
+    "hi " + name
+g := new Greeter()
+console.log g.greet("world")

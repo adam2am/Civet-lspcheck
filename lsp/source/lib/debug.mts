@@ -9,7 +9,12 @@
 export const debugSettings = {
   signatureHelp: true,
   completions: false,
-  rename: false,
+  rename: true,
+  renameLogging: {
+    logEdits: true,      // Log all edits before applying
+    logMappings: true,   // Log sourcemap position mappings
+    logRanges: true,     // Log document ranges for each edit
+  },
   dependencyGraph: false,
   semanticTokens: {
     basic: false,        // Basic debug logging (replaces CIVET_SEM_DEBUG)
