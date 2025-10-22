@@ -298,7 +298,7 @@
       "begin": "\\b(as|satisfies)\\b\\s*",
       "beginCaptures": {
         "1": {
-          "name": "keyword.operator.type.$1.civet"
+          "name": "keyword.control.$1.civet"
         }
       },
       "end": "(?=$|;|\\n|,|\\)|\\}|=>|:=|=)",
@@ -803,8 +803,12 @@
           "name": "support.type.utility.civet"
         },
         {
-          "match": "\\b(keyof|infer|in)\\b",
-          "name": "keyword.operator.type.$1.civet"
+          "match": "\\b(keyof|in)\\b",
+          "name": "keyword.operator.expression.$1.civet"
+        },
+        {
+          "match": "\\b(infer)\\b",
+          "name": "keyword.control.infer.civet"
         },
         {
           "match": "\\b(\\p{Lu}[\\p{L}\\p{N}_$]*)\\b",
