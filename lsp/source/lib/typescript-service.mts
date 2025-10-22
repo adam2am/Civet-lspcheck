@@ -5,6 +5,7 @@ import type {
   SourceMap as CivetSourceMap,
   CompileOptions,
   ParseError,
+  ParseOptions,
 } from "@danielx/civet"
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
@@ -549,11 +550,17 @@ async function TSService(projectURL = "./", logger: Console | RemoteConsole = co
     logger.error("Error loading Civet config " + e)
   }
 
+  const getCivetParseOptions = (): ParseOptions => {
+    const options = civetConfig.parseOptions ?? {}
+    return { ...options }
+  }
+
   return Object.assign({}, service, {
     host,
     getSourceFileName(fileName: string) {
       return remapFileName(fileName, transpilers)
     },
+    getCivetParseOptions,
     loadPlugins: async function () {
       const civetFolder = path.join(projectPath, "./.civet/")
       // List files in civet folder

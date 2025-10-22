@@ -36,6 +36,33 @@ enum Color {
 }
 """
 
+civetCoffeeCommentContent := """
+"civet coffeeComment"
+value = 1
+# hello from coffee comment
+"""
+
+civetCoffeeCommentEdgeCases := """
+"civet coffeeComment"
+# standalone comment at BOL
+code = 1  # trailing comment after code
+array := [1, 2, 3]
+len := array.#
+class MyClass
+  #privateField = 42
+  publicField = 100
+index := 2
+floor := 10
+half := floor # / 2
+userName := "world"
+greeting := "Hello #\{userName\}!"
+multiline := \"""
+value here
+# this is inside triple quotes
+more text
+\"""
+"""
+
 createTestDocument := (content: string, uri: string) ->
   TextDocument.create(uri, "civet", 0, content)
 
@@ -180,3 +207,130 @@ describe "Semantic Tokens - Edge Cases", ->
 
     redTok := tokens.find((t) => t.text == "Red")
     assert redTok && redTok.typeName == "enumMember" && redTok.modifierNames.includes("declaration") && redTok.modifierNames.includes("readonly"), "TS enumMember expected enumMember+declaration+readonly"
+
+  it "classifies Civet coffee-style '#' comments when enabled", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentContent, "./coffee-comment.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    commentTok := tokens.find((t) => t.typeName == "comment")
+
+    assert commentTok, "Expected a comment token when coffeeComment is enabled"
+    assert commentTok.text.trim().startsWith("#"), "Comment token should originate from '#' line"
+
+  it "coffee comment edge case: standalone comment at BOL is classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find the standalone comment on line 1 (after directive)
+    commentTok := tokens.find((t) => t.text.includes("# standalone comment"))
+
+    console.log "[EDGE-STANDALONE] Found token:", commentTok
+    console.log "[EDGE-ALL]", tokens.filter((t) => t.text.includes("#")).map((t) => `${t.text}:${t.typeName}`)
+
+    assert commentTok, "Expected standalone '#' comment to be classified as comment"
+    assert commentTok.typeName == "comment", `Expected comment, got ${commentTok.typeName}`
+
+  it "coffee comment edge case: trailing comment after code is classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find trailing comment after "code = 1"
+    commentTok := tokens.find((t) => t.text.includes("# trailing comment"))
+
+    console.log "[EDGE-TRAILING] Found token:", commentTok
+
+    assert commentTok, "Expected trailing '#' comment to be classified as comment"
+    assert commentTok.typeName == "comment", `Expected comment, got ${commentTok.typeName}`
+
+  it "coffee comment edge case: length shorthand 'array.#' is NOT classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find line with "array.#" - the # should NOT be a comment token
+    lengthLine := civetDoc.getText().split(/\r?\n/).findIndex((line) => line.includes("array.#"))
+    assert lengthLine >= 0, "Should find line with array.# in test content"
+
+    // Check that there's no comment token on that line starting with "#" alone
+    hashTokensOnLine := tokens.filter((t) => t.line == lengthLine && t.text == "#")
+    commentTokensOnLine := hashTokensOnLine.filter((t) => t.typeName == "comment")
+
+    console.log "[EDGE-LENGTH] Line:", lengthLine, "Hash tokens:", hashTokensOnLine, "Comment tokens:", commentTokensOnLine
+
+    assert commentTokensOnLine.length == 0, `Expected no comment token for 'array.#' length shorthand`
+
+  it "coffee comment edge case: private field '#privateField' is NOT classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find line with "#privateField"
+    privateLine := civetDoc.getText().split(/\r?\n/).findIndex((line) => line.includes("#privateField"))
+    assert privateLine >= 0, "Should find line with #privateField in test content"
+
+    // The "#privateField" should not be classified as a comment token that starts at column 2
+    // (it might be classified as property/variable but not as comment)
+    commentTokensOnLine := tokens.filter((t) => t.line == privateLine && t.typeName == "comment" && t.char == 2)
+
+    console.log "[EDGE-PRIVATE] Line:", privateLine, "Comment tokens:", commentTokensOnLine
+
+    assert commentTokensOnLine.length == 0, `Expected no comment token for private field '#privateField'`
+
+  it "coffee comment edge case: division operator '# / 2' is NOT classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find line with "floor # / 2"
+    divLine := civetDoc.getText().split(/\r?\n/).findIndex((line) => line.includes("floor # / 2"))
+    assert divLine >= 0, "Should find line with 'floor # / 2' in test content"
+
+    // The "#" before "/" should NOT be classified as a comment
+    commentTokensOnLine := tokens.filter((t) => t.line == divLine && t.typeName == "comment" && t.text.trim().startsWith("#"))
+
+    console.log "[EDGE-DIV] Line:", divLine, "Comment tokens:", commentTokensOnLine
+
+    assert commentTokensOnLine.length == 0, `Expected no comment token for division operator '# / 2'`
+
+  it "coffee comment edge case: string interpolation '#{userName}' is NOT classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find line with "#{userName}"
+    interpLine := civetDoc.getText().split(/\r?\n/).findIndex((line) => line.includes("#{userName}"))
+    assert interpLine >= 0, "Should find line with '#{userName}' in test content"
+
+    // The "#{" inside the string should NOT be classified as a comment
+    commentTokensOnLine := tokens.filter((t) => t.line == interpLine && t.typeName == "comment" && t.text.includes("#"))
+
+    console.log "[EDGE-INTERP] Line:", interpLine, "Comment tokens:", commentTokensOnLine
+
+    assert commentTokensOnLine.length == 0, `Expected no comment token for string interpolation '#{userName}'`
+
+  it "coffee comment edge case: '#' inside triple-quoted strings is NOT classified as comment", async ->
+    civetDoc := await loadTestFile(service, civetCoffeeCommentEdgeCases, "./coffee-edge.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // Find line with "# this is inside triple quotes"
+    tripleLine := civetDoc.getText().split(/\r?\n/).findIndex((line) => line.includes("# this is inside triple quotes"))
+    assert tripleLine >= 0, "Should find line with '# this is inside triple quotes' in test content"
+
+    // The "#" inside the triple-quoted string should NOT be classified as a comment
+    commentTokensOnLine := tokens.filter((t) => t.line == tripleLine && t.typeName == "comment")
+
+    console.log "[EDGE-TRIPLE] Line:", tripleLine, "Comment tokens:", commentTokensOnLine
+
+    assert commentTokensOnLine.length == 0, `Expected no comment token for '#' inside triple-quoted string`
