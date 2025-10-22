@@ -2,7 +2,72 @@
   "scopeName": "source.civet",
   "patterns": [
     {
-      "match": "(new)\\s+(?:(?:(class)\\s+(\\w+(?:\\.\\w*)*)?)|(\\w+(?:\\.\\w*)*))",
+      "name": "meta.type.declaration.civet",
+      "begin": "\\b(type|interface)\\s+([\\p{L}_$][\\p{L}\\p{N}_$]*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.$1.civet"
+        },
+        "2": {
+          "name": "entity.name.type.civet"
+        }
+      },
+      "end": "(?=;|$)",
+      "patterns": [
+        {
+          "include": "#type_expressions"
+        }
+      ]
+    },
+    {
+      "name": "meta.enum.declaration.civet",
+      "match": "\\b(enum)\\s+([\\p{L}_$][\\p{L}\\p{N}_$]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.enum.civet"
+        },
+        "2": {
+          "name": "entity.name.type.enum.civet"
+        }
+      }
+    },
+    {
+      "contentName": "meta.type.annotation.civet",
+      "begin": "(?<=([a-zA-Z_$][\\w$]*\\??|\\)))\\s*(:)(?!:)",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.separator.colon.civet"
+        }
+      },
+      "end": "(?=\\s*(:=|=|=>|,|\\)|\\}|\\s*$))",
+      "patterns": [
+        {
+          "include": "#type_expressions"
+        }
+      ]
+    },
+    {
+      "name": "meta.type.assertion.angle-bracket.civet",
+      "begin": "(?<![a-zA-Z0-9_$])(<)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.begin.civet"
+        }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.typeparameters.end.civet"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#type_expressions"
+        }
+      ]
+    },
+    {
+      "match": "(new)\\s+(?:(?:(class)\\s+([\\p{L}_$][\\p{L}\\p{N}_$]*(?:\\.[\\p{L}_$][\\p{L}\\p{N}_$]*)*)?)|([\\p{L}_$][\\p{L}\\p{N}_$]*(?:\\.[\\p{L}_$][\\p{L}\\p{N}_$]*)*))",
       "name": "meta.class.instance.constructor.civet",
       "captures": {
         "1": {
@@ -167,19 +232,115 @@
       ]
     },
     {
-      "match": "\\b(?<![\\.\\$])(break|by|case|catch|continue|else|finally|for|in|of|if|return|switch|then|throw|try|unless|when|while|until|loop|do|export|import|default|from|as|yield|async|await|(?<=for)\\s+own)(?!\\s*:)\\b",
+      "name": "meta.export.civet",
+      "begin": "\\b(export)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.export.civet"
+        }
+      },
+      "end": "(?=;|$)",
+      "patterns": [
+        {
+          "match": "\\b(default)\\b",
+          "name": "keyword.control.default.civet"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    {
+      "name": "meta.import.civet",
+      "begin": "\\b(import)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.import.civet"
+        }
+      },
+      "end": "(?=;|$)",
+      "patterns": [
+        {
+          "match": "\\b(type)\\b",
+          "name": "keyword.control.type.civet"
+        },
+        {
+          "match": "\\b(from)\\b",
+          "name": "keyword.control.from.civet"
+        },
+        {
+          "match": "\\b(as)\\b",
+          "name": "keyword.control.as.civet"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    {
+      "match": "\\b(?<![\\.\\$])(break|by|case|catch|continue|else|finally|for|in|of|if|return|switch|then|throw|try|unless|when|while|until|loop|do|yield|async|await|(?<=for)\\s+own)(?!\\s*:)\\b",
       "name": "keyword.control.civet"
     },
     {
-      "match": "\\b(?<![\\.\\$])(delete|instanceof|new|typeof)(?!\\s*:)\\b",
+      "match": "\\b(?<![\\.\\$])(delete|instanceof|new|void)(?!\\s*:)\\b",
       "name": "keyword.operator.$1.civet"
     },
     {
-      "match": "\\b(?<![\\.\\$])(case|function|var|void|with|const|let|enum|native|__hasProp|__extends|__slice|__bind|__indexOf|implements|interface|package|private|protected|public|static)(?!\\s*:)\\b",
+      "match": "\\b(typeof)\\b",
+      "name": "keyword.operator.expression.typeof.civet"
+    },
+    {
+      "match": "\\b(?<![\\.\\$])(is)\\b",
+      "name": "keyword.operator.type.civet"
+    },
+    {
+      "name": "meta.type.assertion.civet",
+      "begin": "\\b(as|satisfies)\\b\\s*",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.type.$1.civet"
+        }
+      },
+      "end": "(?=$|;|\\n|,|\\)|\\}|=>|:=|=)",
+      "patterns": [
+        {
+          "include": "#type_expressions"
+        }
+      ]
+    },
+    {
+      "name": "meta.var.expr.civet",
+      "begin": "\\b(const|let|var)\\b",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.$1.civet"
+        }
+      },
+      "end": "(?=;|$)",
+      "patterns": [
+        {
+          "include": "$self"
+        }
+      ]
+    },
+    {
+      "match": "\\b(?<![\\.\\$])(function)(?!\\s*:)\\b",
+      "name": "storage.type.function.civet"
+    },
+    {
+      "match": "\\b(namespace|module|declare)\\b",
+      "name": "storage.type.$1.civet"
+    },
+    {
+      "match": "\\b(?<![\\.\\$])(public|private|protected|static|readonly|abstract|extends|implements)(?!\\s*:)\\b",
+      "name": "storage.modifier.civet"
+    },
+    {
+      "match": "\\b(?<![\\.\\$])(case|with|native|__hasProp|__extends|__slice|__bind|__indexOf|package)(?!\\s*:)\\b",
       "name": "keyword.reserved.civet"
     },
     {
-      "begin": "(?x)\n(?<=\\s|^)((@)?[a-zA-Z_$][\\w$]*)\n\\s*([:=])\\s*\n(?=(\\([^\\(\\)]*\\)\\s*)?[=-]>)",
+      "begin": "(?x)\n(?<=\\s|^)((@)?[\\p{L}_$][\\p{L}\\p{N}_$]*)\n\\s*([:=])\\s*\n(?=(\\([^\\(\\)]*\\)\\s*)?[=-]>)",
       "beginCaptures": {
         "1": {
           "name": "entity.name.function.civet"
@@ -282,7 +443,7 @@
           "include": "$self"
         },
         {
-          "match": "[a-zA-Z$_]\\w*",
+          "match": "[\\p{L}_$][\\p{L}\\p{N}_$]*",
           "name": "variable.assignment.civet"
         }
       ]
@@ -306,7 +467,7 @@
           "include": "$self"
         },
         {
-          "match": "[a-zA-Z$_]\\w*",
+          "match": "[\\p{L}_$][\\p{L}\\p{N}_$]*",
           "name": "variable.assignment.civet"
         }
       ]
@@ -343,7 +504,7 @@
           "name": "entity.other.inherited-class.civet"
         }
       },
-      "match": "(?<=\\s|^|\\[|\\()(class)\\s+(extends)\\s+(@?[a-zA-Z\\$\\._][\\w\\.]*)",
+      "match": "(?<=\\s|^|\\[|\\()(class)\\s+(extends)\\s+(@?[\\p{L}_$][\\p{L}\\p{N}_\\.$]*)",
       "name": "meta.class.civet"
     },
     {
@@ -361,7 +522,7 @@
           "name": "entity.other.inherited-class.civet"
         }
       },
-      "match": "(?<=\\s|^|\\[|\\()(class\\b)\\s+(@?[a-zA-Z\\$_][\\w\\.]*)?(?:\\s+(extends)\\s+(@?[a-zA-Z\\$\\._][\\w\\.]*))?",
+      "match": "(?<=\\s|^|\\[|\\()(class\\b)\\s+(@?[\\p{L}_$][\\p{L}\\p{N}_\\.$]*)?(?:\\s+(extends)\\s+(@?[\\p{L}_$][\\p{L}\\p{N}_\\.$]*))?",
       "name": "meta.class.civet"
     },
     {
@@ -457,6 +618,13 @@
       },
       "patterns": [
         {
+          "match": ":(?!:)",
+          "name": "punctuation.separator.key-value.civet"
+        },
+        {
+          "include": "#type_expressions"
+        },
+        {
           "include": "$self"
         }
       ]
@@ -482,6 +650,9 @@
         {
           "match": "(?<!\\.)\\.{2}",
           "name": "keyword.operator.slice.inclusive.civet"
+        },
+        {
+          "include": "#type_expressions"
         },
         {
           "include": "$self"
@@ -545,7 +716,7 @@
         },
         {
           "begin": "(?=(@|@?[\\w$]+|[=-]>|\\-\\d|\\[|{|\"|'))",
-          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
+          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof|as|satisfies)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
           "name": "meta.arguments.civet",
           "patterns": [
             {
@@ -621,10 +792,37 @@
         }
       ]
     },
+    "type_expressions": {
+      "patterns": [
+        {
+          "match": "\\b(any|boolean|bigint|never|null|number|object|string|symbol|undefined|unknown|void)\\b",
+          "name": "support.type.primitive.civet"
+        },
+        {
+          "match": "\\b(Partial|Required|Readonly|Record|Pick|Omit|Exclude|Extract|NonNullable|Parameters|ConstructorParameters|ReturnType|InstanceType|Uppercase|Lowercase|Capitalize|Uncapitalize)\\b",
+          "name": "support.type.utility.civet"
+        },
+        {
+          "match": "\\b(keyof|infer|in)\\b",
+          "name": "keyword.operator.type.$1.civet"
+        },
+        {
+          "match": "\\b(\\p{Lu}[\\p{L}\\p{N}_$]*)\\b",
+          "name": "entity.name.type.civet"
+        },
+        {
+          "match": "[&|]",
+          "name": "keyword.operator.type.civet"
+        },
+        {
+          "include": "$self"
+        }
+      ]
+    },
     "function_calls": {
       "patterns": [
         {
-          "begin": "(@)?([\\w$]+)(?=\\()",
+          "begin": "(@)?([\\p{L}_$][\\p{L}\\p{N}_$]*)(?=\\()",
           "beginCaptures": {
             "1": {
               "name": "variable.other.readwrite.instance.civet"
@@ -646,7 +844,7 @@
           ]
         },
         {
-          "begin": "(?x)\n(@)?([\\w$]+)\n\\s*\n(?=\\s+(?!(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof)(?![\\w$]))(?=(@?[\\w$]+|[=-]>|\\-\\d|\\[|{|\"|')))",
+          "begin": "(?x)\n(@)?([\\p{L}_$][\\p{L}\\p{N}_$]*)\n\\s*\n(?=\\s+(?!(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof|as|satisfies)(?![\\w$]))(?=(@?[\\p{L}_$][\\p{L}\\p{N}_$]*|[=-]>|\\-\\d|\\[|{|\"|')))",
           "beginCaptures": {
             "1": {
               "name": "variable.other.readwrite.instance.civet"
@@ -659,7 +857,7 @@
               ]
             }
           },
-          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
+          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof|as|satisfies)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
           "name": "meta.function-call.civet",
           "patterns": [
             {
@@ -676,7 +874,7 @@
           "name": "support.function.civet"
         },
         {
-          "match": "[a-zA-Z_$][\\w$]*",
+          "match": "[\\p{L}_$][\\p{L}\\p{N}_$]*",
           "name": "entity.name.function.civet"
         },
         {
@@ -703,7 +901,22 @@
           "name": "meta.parameters.civet",
           "patterns": [
             {
-              "match": "([a-zA-Z_$][\\w$]*)(\\.\\.\\.)?",
+              "contentName": "meta.type.annotation.civet",
+              "begin": "\\s*(:)(?!:)",
+              "beginCaptures": {
+                "1": {
+                  "name": "punctuation.separator.colon.civet"
+                }
+              },
+              "end": "(?=\\s*(,|=|\\)|$))",
+              "patterns": [
+                {
+                  "include": "#type_expressions"
+                }
+              ]
+            },
+            {
+              "match": "([\\p{L}_$][\\p{L}\\p{N}_$]*)(\\.\\.\\.)?",
               "captures": {
                 "1": {
                   "name": "variable.parameter.function.civet"
@@ -714,7 +927,7 @@
               }
             },
             {
-              "match": "(@(?:[a-zA-Z_$][\\w$]*)?)(\\.\\.\\.)?",
+              "match": "(@(?:[\\p{L}_$][\\p{L}\\p{N}_$]*)?)(\\.\\.\\.)?",
               "captures": {
                 "1": {
                   "name": "variable.parameter.function.readwrite.instance.civet"
@@ -747,7 +960,7 @@
     "instance_variable": {
       "patterns": [
         {
-          "match": "(@)([a-zA-Z_\\$]\\w*)?",
+          "match": "(@)([\\p{L}_$][\\p{L}\\p{N}_$]*)?",
           "name": "variable.other.readwrite.instance.civet"
         }
       ]
@@ -793,7 +1006,7 @@
     "method_calls": {
       "patterns": [
         {
-          "begin": "(?:(\\.)|(::))\\s*([\\w$]+)\\s*(?=\\()",
+          "begin": "(?:(\\.)|(::))\\s*([\\p{L}_$][\\p{L}\\p{N}_$]*)\\s*(?=\\()",
           "beginCaptures": {
             "1": {
               "name": "punctuation.separator.method.period.civet"
@@ -818,7 +1031,7 @@
           ]
         },
         {
-          "begin": "(?:(\\.)|(::))\\s*([\\w$]+)\\s*(?=\\s+(?!(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof)(?![\\w$]))(?=(@|@?[\\w$]+|[=-]>|\\-\\d|\\[|{|\"|')))",
+          "begin": "(?:(\\.)|(::))\\s*([\\p{L}_$][\\p{L}\\p{N}_$]*)\\s*(?=\\s+(?!(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof|as|satisfies)(?![\\w$]))(?=(@|@?[\\p{L}_$][\\p{L}\\p{N}_$]*|[=-]>|\\-\\d|\\[|{|\"|')))",
           "beginCaptures": {
             "1": {
               "name": "punctuation.separator.method.period.civet"
@@ -834,7 +1047,7 @@
               ]
             }
           },
-          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
+          "end": "(?=\\s*(?<![\\w$])(of|in|then|is|isnt|and|or|for|else|when|if|unless|by|instanceof|as|satisfies)(?![\\w$]))|(?=\\s*(}|\\]|\\)|#|$))",
           "name": "meta.method-call.civet",
           "patterns": [
             {
@@ -859,7 +1072,7 @@
           "name": "support.function.dom.civet"
         },
         {
-          "match": "[a-zA-Z_$][\\w$]*",
+          "match": "[\\p{L}_$][\\p{L}\\p{N}_$]*",
           "name": "entity.name.function.civet"
         },
         {
@@ -913,11 +1126,11 @@
     "objects": {
       "patterns": [
         {
-          "match": "[A-Z][A-Z0-9_$]*(?=\\s*\\??(\\.\\s*[a-zA-Z_$]\\w*|::))",
+          "match": "\\p{Lu}[\\p{L}\\p{N}_$]*(?=\\s*\\??(\\.\\s*[\\p{L}_$][\\p{L}\\p{N}_$]*|::))",
           "name": "constant.other.object.civet"
         },
         {
-          "match": "[a-zA-Z_$][\\w$]*(?=\\s*\\??(\\.\\s*[a-zA-Z_$]\\w*|::))",
+          "match": "[\\p{L}_$][\\p{L}\\p{N}_$]*(?=\\s*\\??(\\.\\s*[\\p{L}_$][\\p{L}\\p{N}_$]*|::))",
           "name": "variable.other.object.civet"
         }
       ]
@@ -925,7 +1138,7 @@
     "operators": {
       "patterns": [
         {
-          "match": "(?:([a-zA-Z$_][\\w$]*)?\\s+|(?<![\\w$]))(and=|or=)",
+          "match": "(?:([\\p{L}_$][\\p{L}\\p{N}_$]*)?\\s+|(?<![\\w$]))(and=|or=)",
           "captures": {
             "1": {
               "name": "variable.assignment.civet"
@@ -936,7 +1149,7 @@
           }
         },
         {
-          "match": "([a-zA-Z$_][\\w$]*)?\\s*(%=|\\+=|-=|\\*=|&&=|\\|\\|=|\\?=|(?<!\\()/=)",
+          "match": "([\\p{L}_$][\\p{L}\\p{N}_$]*)?\\s*(%=|\\+=|-=|\\*=|&&=|\\|\\|=|\\?=|(?<!\\()/=)",
           "captures": {
             "1": {
               "name": "variable.assignment.civet"
@@ -947,7 +1160,7 @@
           }
         },
         {
-          "match": "([a-zA-Z$_][\\w$]*)?\\s*(&=|\\^=|<<=|>>=|>>>=|\\|=)",
+          "match": "([\\p{L}_$][\\p{L}\\p{N}_$]*)?\\s*(&=|\\^=|<<=|>>=|>>>=|\\|=)",
           "captures": {
             "1": {
               "name": "variable.assignment.civet"
@@ -974,7 +1187,7 @@
           "name": "keyword.operator.bitwise.civet"
         },
         {
-          "match": "([a-zA-Z$_][\\w$]*)?\\s*(\\.=|:=|=|:(?!:))(?![>=])",
+          "match": "([\\p{L}_$][\\p{L}\\p{N}_$]*)?\\s*(\\.=|:=|=)(?![>=])",
           "captures": {
             "1": {
               "name": "variable.assignment.civet"
@@ -1020,7 +1233,7 @@
     "properties": {
       "patterns": [
         {
-          "match": "(?:(\\.)|(::))\\s*([A-Z][A-Z0-9_$]*\\b\\$*)(?=\\s*\\??(\\.\\s*[a-zA-Z_$]\\w*|::))",
+          "match": "(?:(\\.)|(::))\\s*(\\p{Lu}[\\p{L}\\p{N}_$]*\\b\\$*)(?=\\s*\\??(\\.\\s*[\\p{L}_$][\\p{L}\\p{N}_$]*|::))",
           "captures": {
             "1": {
               "name": "punctuation.separator.property.period.civet"
@@ -1034,7 +1247,7 @@
           }
         },
         {
-          "match": "(?:(\\.)|(::))\\s*(\\$*[a-zA-Z_$][\\w$]*)(?=\\s*\\??(\\.\\s*[a-zA-Z_$]\\w*|::))",
+          "match": "(?:(\\.)|(::))\\s*(\\$*[\\p{L}_$][\\p{L}\\p{N}_$]*)(?=\\s*\\??(\\.\\s*[\\p{L}_$][\\p{L}\\p{N}_$]*|::))",
           "captures": {
             "1": {
               "name": "punctuation.separator.property.period.civet"
@@ -1048,7 +1261,7 @@
           }
         },
         {
-          "match": "(?:(\\.)|(::))\\s*([A-Z][A-Z0-9_$]*\\b\\$*)",
+          "match": "(?:(\\.)|(::))\\s*(\\p{Lu}[\\p{L}\\p{N}_$]*\\b\\$*)",
           "captures": {
             "1": {
               "name": "punctuation.separator.property.period.civet"
@@ -1062,7 +1275,7 @@
           }
         },
         {
-          "match": "(?:(\\.)|(::))\\s*(\\$*[a-zA-Z_$][\\w$]*)",
+          "match": "(?:(\\.)|(::))\\s*(\\$*[\\p{L}_$][\\p{L}\\p{N}_$]*)",
           "captures": {
             "1": {
               "name": "punctuation.separator.property.period.civet"
