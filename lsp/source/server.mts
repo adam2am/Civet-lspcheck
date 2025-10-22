@@ -245,60 +245,88 @@ connection.onInitialized(async () => {
 const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
 
 connection.onHover(async ({ textDocument, position }) => {
-  // logger.log("hover"+ position)
-  const sourcePath = documentToSourcePath(textDocument)
-  assert(sourcePath)
+  try {
+    // logger.log("hover"+ position)
+    const sourcePath = documentToSourcePath(textDocument)
+    assert(sourcePath)
 
-  const service = await ensureServiceForSourcePath(sourcePath)
-  if (!service) return
+    const service = await ensureServiceForSourcePath(sourcePath)
+    if (!service) return
 
-  const doc = documents.get(textDocument.uri)
-  assert(doc)
+    const doc = documents.get(textDocument.uri)
+    assert(doc)
 
-  let info
-  await updating(textDocument)
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
-    const p = doc.offsetAt(position)
-    info = service.getQuickInfoAtPosition(sourcePath, p)
-  } else { // Transpiled
-    // need to sourcemap the line/columns
-    const meta = service.host.getMeta(sourcePath)
-    if (!meta) return
-    const sourcemapLines = meta.sourcemapLines
-    const transpiledDoc = meta.transpiledDoc
-    if (!transpiledDoc) return
+    let info
+    await updating(textDocument)
+    if (sourcePath.match(tsSuffix)) { // non-transpiled
+      // Check if file is in program before calling TypeScript API
+      const program = service.getProgram()
+      if (!program?.getSourceFile(sourcePath)) {
+        logger.warn(`[HOVER] Source file not in program: ${sourcePath}`)
+        return
+      }
+      
+      const p = doc.offsetAt(position)
+      info = service.getQuickInfoAtPosition(sourcePath, p)
+    } else { // Transpiled
+      // need to sourcemap the line/columns
+      const meta = service.host.getMeta(sourcePath)
+      if (!meta) return
+      const sourcemapLines = meta.sourcemapLines
+      const transpiledDoc = meta.transpiledDoc
+      if (!transpiledDoc) return
 
-    // Map input hover position into output TS position
-    // Don't map for files that don't have a sourcemap (plain .ts for example)
-    if (sourcemapLines) {
-      position = forwardMap(sourcemapLines, position)
+      // Map input hover position into output TS position
+      // Don't map for files that don't have a sourcemap (plain .ts for example)
+      if (sourcemapLines) {
+        position = forwardMap(sourcemapLines, position)
+      }
+
+      // logger.log("onHover2"+ sourcePath+ position)
+
+      const p = transpiledDoc.offsetAt(position)
+      const transpiledPath = documentToSourcePath(transpiledDoc)
+      
+      // Check if transpiled file is in program before calling TypeScript API
+      const program = service.getProgram()
+      if (!program?.getSourceFile(transpiledPath)) {
+        logger.warn(`[HOVER] Transpiled file not in program yet: ${transpiledPath}`)
+        // Force TypeScript to synchronize by calling a cheap operation
+        // This helps with files that aren't imported anywhere (like test fixtures)
+        service.getSyntacticDiagnostics(transpiledPath)
+        // Try again after sync
+        const updatedProgram = service.getProgram()
+        if (!updatedProgram?.getSourceFile(transpiledPath)) {
+          logger.warn(`[HOVER] File still not in program after sync attempt`)
+          return
+        }
+      }
+      
+      info = service.getQuickInfoAtPosition(transpiledPath, p)
+      // logger.log("onHover3"+ info)
+
     }
+    if (!info) return
 
-    // logger.log("onHover2"+ sourcePath+ position)
+    const display = displayPartsToString(info.displayParts);
+    // TODO: Replace Previewer
+    const documentation = Previewer.plain(displayPartsToString(info.documentation));
 
-    const p = transpiledDoc.offsetAt(position)
-    const transpiledPath = documentToSourcePath(transpiledDoc)
-    info = service.getQuickInfoAtPosition(transpiledPath, p)
-    // logger.log("onHover3"+ info)
-
+    return {
+      // TODO: Range
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: [
+          `\`\`\`typescript\n${display}\n\`\`\``,
+          documentation ?? "",
+          ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
+        ].join("\n\n")
+      }
+    };
+  } catch (error) {
+    logger.error(`[HOVER] Error: ${error}`)
+    return
   }
-  if (!info) return
-
-  const display = displayPartsToString(info.displayParts);
-  // TODO: Replace Previewer
-  const documentation = Previewer.plain(displayPartsToString(info.documentation));
-
-  return {
-    // TODO: Range
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: [
-        `\`\`\`typescript\n${display}\n\`\`\``,
-        documentation ?? "",
-        ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
-      ].join("\n\n")
-    }
-  };
 })
 
 // This handler provides the initial list of the completion items.
@@ -360,6 +388,19 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
 
   const p = transpiledDoc.offsetAt(position)
   const transpiledPath = documentToSourcePath(transpiledDoc)
+  
+  // Ensure file is in program before calling TypeScript API
+  const program = service.getProgram()
+  if (!program?.getSourceFile(transpiledPath)) {
+    logger.warn(`[COMPLETION] Transpiled file not in program yet: ${transpiledPath}`)
+    service.getSyntacticDiagnostics(transpiledPath)
+    const updatedProgram = service.getProgram()
+    if (!updatedProgram?.getSourceFile(transpiledPath)) {
+      logger.warn(`[COMPLETION] File still not in program after sync attempt`)
+      return
+    }
+  }
+  
   const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
 
@@ -465,6 +506,19 @@ connection.onDefinition(async ({ textDocument, position }) => {
 
     const p = transpiledDoc.offsetAt(position)
     const transpiledPath = documentToSourcePath(transpiledDoc)
+    
+    // Ensure file is in program before calling TypeScript API
+    const program = service.getProgram()
+    if (!program?.getSourceFile(transpiledPath)) {
+      logger.warn(`[DEFINITION] Transpiled file not in program yet: ${transpiledPath}`)
+      service.getSyntacticDiagnostics(transpiledPath)
+      const updatedProgram = service.getProgram()
+      if (!updatedProgram?.getSourceFile(transpiledPath)) {
+        logger.warn(`[DEFINITION] File still not in program after sync attempt`)
+        return
+      }
+    }
+    
     definitions = service.getDefinitionAtPosition(transpiledPath, p)
   }
 
@@ -536,6 +590,19 @@ connection.onReferences(async ({ textDocument, position }) => {
 
     const p = transpiledDoc.offsetAt(position)
     const transpiledPath = documentToSourcePath(transpiledDoc)
+    
+    // Ensure file is in program before calling TypeScript API
+    const program = service.getProgram()
+    if (!program?.getSourceFile(transpiledPath)) {
+      logger.warn(`[REFERENCES] Transpiled file not in program yet: ${transpiledPath}`)
+      service.getSyntacticDiagnostics(transpiledPath)
+      const updatedProgram = service.getProgram()
+      if (!updatedProgram?.getSourceFile(transpiledPath)) {
+        logger.warn(`[REFERENCES] File still not in program after sync attempt`)
+        return
+      }
+    }
+    
     references = service.getReferencesAtPosition(transpiledPath, p)
   }
 
@@ -603,6 +670,7 @@ connection.onSignatureHelp(async (params) => {
 });
 
 connection.languages.semanticTokens.on(async (params) => {
+  logger.log(`[SEMANTIC-TOKENS-FULL] Request for ${params.textDocument.uri}`);
   const deps: FeatureDeps = {
     documents,
     ensureServiceForSourcePath,
@@ -610,10 +678,13 @@ connection.languages.semanticTokens.on(async (params) => {
     updating,
     debug: debugSettings,
   };
-  return handleSemanticTokensFull(params, deps);
+  const result = await handleSemanticTokensFull(params, deps);
+  logger.log(`[SEMANTIC-TOKENS-FULL] Returned ${result?.data?.length || 0} encoded tokens`);
+  return result;
 });
 
 connection.languages.semanticTokens.onRange(async (params) => {
+  logger.log(`[SEMANTIC-TOKENS-RANGE] Request for ${params.textDocument.uri}`);
   const deps: FeatureDeps = {
     documents,
     ensureServiceForSourcePath,
@@ -621,7 +692,9 @@ connection.languages.semanticTokens.onRange(async (params) => {
     updating,
     debug: debugSettings,
   };
-  return handleSemanticTokensRange(params, deps);
+  const result = await handleSemanticTokensRange(params, deps);
+  logger.log(`[SEMANTIC-TOKENS-RANGE] Returned ${result?.data?.length || 0} encoded tokens`);
+  return result;
 });
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
