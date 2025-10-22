@@ -107,8 +107,12 @@ import {
   const SEM_LOG_ALL = semDebug.verbose;
   const SEM_DEBUG = semDebug.basic;
   const SEM_PERF = semDebug.performance;
-  const REFINEMENT_DISABLED = !semDebug.refinement;
   const SEM_MARKERS = new Set<string>(semDebug.markers);
+  
+  // Refinement is CORE functionality, not a debug setting. 
+  // It is required for Civet tokens to be classified correctly.
+  // DO NOT hide this behind debug flags.
+  const REFINEMENT_ENABLED = true;
   
   function isMarkerIdentifier(name: string | undefined): boolean {
     return !!name && SEM_MARKERS.has(name)
@@ -503,10 +507,20 @@ import {
     return legend.variable
   }
   
+  // Rule: EnumMemberNameRule
+  const EnumMemberNameRule: RefinementRule = (ctx) => {
+    const { idNode, legend } = ctx
+    if (!idNode) return undefined
+    const parent = idNode.parent
+    if (ts.isEnumMember(parent) && parent.name === idNode) return legend.enumMember
+    return undefined
+  }
+  
   const REFINEMENT_RULES: RefinementRule[] = [
     NamespaceLikeSymbolRule,
     ParameterNameRule,
     BindingNameRule,
+    EnumMemberNameRule,
     PromoteCallablePropertyToMethodRule,
     ObjectMemberNameRule,
     PropertyAccessMemberRule,
@@ -615,7 +629,7 @@ import {
     const tokenCount = data.length / 3
     if (SEM_DEBUG) {
       console.log(`🔍 SEMANTIC-TOKENS: Processing ${tokenCount} tokens from ${providerName}`)
-      if (REFINEMENT_DISABLED) {
+      if (!REFINEMENT_ENABLED) {
         console.log(`🔍 TRUST-TS: Refinement DISABLED - trusting TypeScript Service completely`)
       }
     }
@@ -684,7 +698,7 @@ import {
   
       // Apply smart refinement only where needed (unless disabled by feature flag)
       let refined: number | undefined;
-      if (!REFINEMENT_DISABLED) {
+      if (REFINEMENT_ENABLED) {
         const refinementStart = performance.now()
         refined = refineTokenTypeWithRules(
         tokenType,
@@ -710,13 +724,13 @@ import {
       }
   
       if (SEM_DEBUG && isMarkerIdentifier(tokenText)) {
-        const wasRefined = !REFINEMENT_DISABLED && (refined !== undefined)
+        const wasRefined = REFINEMENT_ENABLED && (refined !== undefined)
         console.log(`[INSPECT] Final classification for "${tokenText}": type=${lspTypeIndexToName(tokenType)}, refined=${wasRefined}`)
       }
   
       // Collect logging data efficiently
       if (needsDetailedLogging || isMarkerIdentifier(tokenText)) {
-        const wasRefined = !REFINEMENT_DISABLED && (refined !== undefined)
+        const wasRefined = REFINEMENT_ENABLED && (refined !== undefined)
         markerDetails.push({
           text: tokenText,
           pos: tokenStart,
@@ -724,7 +738,7 @@ import {
           type: lspTypeIndexToName(tokenType),
           mods: modifierMaskToNames(lspTokenModifiers),
           refined: wasRefined,
-          refinementDisabled: REFINEMENT_DISABLED,
+          refinementDisabled: !REFINEMENT_ENABLED,
         })
       }
       
@@ -758,7 +772,7 @@ import {
       console.log(`  📊 Total: ${perfTimings.total.toFixed(2)}ms | Tokens: ${tokenCount} | Provider: ${providerName}`)
       console.log(`  🔍 Provider: ${perfTimings.provider.toFixed(2)}ms (${(perfTimings.provider/perfTimings.total*100).toFixed(1)}%)`)
       console.log(`  ⚙️  Processing: ${perfTimings.processing.toFixed(2)}ms (${(perfTimings.processing/perfTimings.total*100).toFixed(1)}%)`)
-      if (REFINEMENT_DISABLED) {
+      if (!REFINEMENT_ENABLED) {
         console.log(`    🔧 Refinement: DISABLED (trusting TS Service completely)`)
       } 
       else {

@@ -1,0 +1,53 @@
+class ThisTypeExample{
+  value: number := 0
+  
+  setValue(value: number)
+    @value = value
+}
+const point = {x: 10, y: 20} as const
+
+// Intersection type (& operator)
+type Intersection = {name: string} & {age: number}
+type Combined = MyInterface & {extra: boolean}
+
+// function keyword
+function namedFunc(): void
+  console.log "named function"
+// static keyword
+class StaticClass
+  static staticProp: number := 42
+  static staticMethod(): number
+    return StaticClass.staticProp
+
+// enum keyword
+enum Color 
+  Red
+  Green
+  Blue
+
+enum Direction
+  Up = "UP"
+  Down = "DOWN"
+
+// namespace keyword
+namespace MyNamespace
+  export interface Config
+    value: number
+
+abstract class AbstractClass
+  abstract method(): void
+
+
+// public, private, protected keywords
+class AccessModifiers
+  public publicProp: string := "public"
+  private privateProp: string := "private"
+  protected protectedProp: string := "protected"
+  
+  public publicMethod(): void
+    console.log "public"
+
+// Generic interface
+interface GenericInterface2<T>
+  data: T
+  process: (input: T) => T

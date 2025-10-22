@@ -1,0 +1,182 @@
+import TSService from "../../source/lib/typescript-service.mts"
+import { pathToFileURL } from "url"
+import { TextDocument } from "vscode-languageserver-textdocument"
+import { handleSemanticTokensFull, getSemanticLegend } from "../../source/features/semanticToken.mts"
+
+assert from assert
+
+// Minimal content focusing on class method and instance property
+civetContent := """
+class ThisTypeExample{
+  value: number := 0
+  
+  setValue(value: number)
+    @value = value
+}
+
+enum Color
+  Red
+  Green
+  Blue
+"""
+
+tsContent := """
+class ThisTypeExample {
+  readonly value: number = 0;
+  
+  setValue(value: number) {
+    this.value = value;
+  }
+}
+
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+"""
+
+createTestDocument := (content: string, uri: string) ->
+  TextDocument.create(uri, "civet", 0, content)
+
+loadTestFile := async (service: Awaited<ReturnType<typeof TSService>>, content: string, fileName: string) ->
+  document := createTestDocument(content, pathToFileURL(fileName).href)
+  service.host.addOrUpdateDocument(document)
+  return document
+
+posOf := (document: TextDocument, needle: string) ->
+  text := document.getText()
+  idx := text.indexOf(needle)
+  assert idx >= 0, `Marker not found: ${needle}`
+  document.positionAt(idx)
+
+// Decode LSP semantic tokens (relative-encoded) into absolute positions
+// Returns array of { line, char, length, typeIdx, typeName, modifiersMask, modifierNames }
+decodeTokens := (data: number[], legend = getSemanticLegend()) ->
+  tokens := []
+  let line = 0
+  let char = 0
+  let i = 0
+  while i < data.length
+    deltaLine := data[i]
+    deltaStart := data[i + 1]
+    length := data[i + 2]
+    typeIdx := data[i + 3]
+    modMask := data[i + 4]
+
+    line += deltaLine
+    if deltaLine == 0
+      char += deltaStart
+    else
+      char = deltaStart
+
+    tokens.push({
+      line,
+      char,
+      length,
+      typeIdx,
+      typeName: legend.tokenTypes[typeIdx],
+      modifiersMask: modMask,
+      modifierNames: legend.tokenModifiers.filter((_, bit) => (modMask & (1 << bit)) != 0),
+    })
+    i += 5
+  tokens
+
+getTokenCovering := (tokens, line: number, ch: number) ->
+  for t in tokens
+    if t.line == line and ch >= t.char and ch < t.char + t.length
+      return t
+  undefined
+
+materializeTokens := (document: TextDocument, tokens) ->
+  tokens.map (t) ->
+    startOffset := document.offsetAt({ line: t.line, character: t.char })
+    endOffset := document.offsetAt({ line: t.line, character: t.char + t.length })
+    text := document.getText().slice(startOffset, endOffset)
+    Object.assign({}, t, { text })
+
+makeDeps := (service, document) ->
+  {
+    ensureServiceForSourcePath: async (_path: string) => service
+    documentToSourcePath: (doc) => doc.uri.replace("file://", "")
+    documents: { get: (uri: string) => if uri == document.uri then document else undefined }
+    updating: async () => true
+    debug: { semanticTokens: true }
+  }
+
+describe "Semantic Tokens - Edge Cases", ->
+  @timeout 10000
+
+  let service: Awaited<ReturnType<typeof TSService>>
+
+  before async ->
+    service = await TSService(pathToFileURL("./").href)
+    await service.loadPlugins()
+
+  it "class method name 'setValue' is typed as method (declaration) in Civet", async ->
+    civetDoc := await loadTestFile(service, civetContent, "./edgecases.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    methodTok := tokens.find((t) => t.text == "setValue")
+
+    console.log "[CIVET METHOD] Found token:", methodTok
+    console.log "[CIVET ALL TOKENS]", tokens.map((t) => `${t.text}:${t.typeName}`)
+
+    assert methodTok, "Expected a token at method name"
+    assert methodTok.typeName == "method", `Expected method, got ${methodTok.typeName}`
+    assert methodTok.modifierNames.includes("declaration"), `Expected declaration modifier, got ${methodTok.modifierNames}`
+
+  it "instance property '@value' is typed as property (readonly) in Civet", async ->
+    civetDoc := await loadTestFile(service, civetContent, "./edgecases.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    // token may be either "@value" or "value" depending on mapping; accept both
+    propTok := tokens.find((t) => t.text == "@value" or t.text == "value")
+
+    console.log "[CIVET PROPERTY] Found token:", propTok
+    console.log "[CIVET ALL TOKENS]", tokens.map((t) => `${t.text}:${t.typeName}`)
+
+    assert propTok, "Expected a token at @value"
+    assert propTok.typeName == "property", `Expected property, got ${propTok.typeName}`
+    assert propTok.modifierNames.includes("readonly"), `Expected readonly modifier, got ${propTok.modifierNames}`
+
+  it "TypeScript parity: method and property classifications match in TS", async ->
+    tsDoc := await loadTestFile(service, tsContent, "./edgecases.ts")
+    deps := makeDeps(service, tsDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: tsDoc.uri } }, deps)
+    tokens := materializeTokens(tsDoc, decodeTokens(result.data))
+
+    methodTok := tokens.find((t) => t.text == "setValue")
+    propTok := tokens.find((t) => t.text == "value")
+
+    console.log "[TS METHOD] Found token:", methodTok
+    console.log "[TS PROPERTY] Found token:", propTok
+    console.log "[TS ALL TOKENS]", tokens.map((t) => `${t.text}:${t.typeName}`)
+
+    assert methodTok && methodTok.typeName == "method" && methodTok.modifierNames.includes("declaration"), "TS method expected method+declaration"
+    assert propTok && propTok.typeName == "property" && propTok.modifierNames.includes("readonly"), "TS property expected property+readonly"
+
+  it "enum member 'Red' is typed as enumMember (declaration, readonly) in Civet", async ->
+    civetDoc := await loadTestFile(service, civetContent, "./edgecases.civet")
+    deps := makeDeps(service, civetDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: civetDoc.uri } }, deps)
+    tokens := materializeTokens(civetDoc, decodeTokens(result.data))
+
+    redTok := tokens.find((t) => t.text == "Red")
+    assert redTok, "Expected a token for enum member 'Red'"
+    assert redTok.typeName == "enumMember", `Expected enumMember, got ${redTok.typeName}`
+    assert redTok.modifierNames.includes("declaration"), `Expected declaration modifier, got ${redTok.modifierNames}`
+    assert redTok.modifierNames.includes("readonly"), `Expected readonly modifier, got ${redTok.modifierNames}`
+
+  it "TypeScript parity: enum member 'Red' is typed as enumMember in TS", async ->
+    tsDoc := await loadTestFile(service, tsContent, "./edgecases.ts")
+    deps := makeDeps(service, tsDoc)
+    result := await handleSemanticTokensFull({ textDocument: { uri: tsDoc.uri } }, deps)
+    tokens := materializeTokens(tsDoc, decodeTokens(result.data))
+
+    redTok := tokens.find((t) => t.text == "Red")
+    assert redTok && redTok.typeName == "enumMember" && redTok.modifierNames.includes("declaration") && redTok.modifierNames.includes("readonly"), "TS enumMember expected enumMember+declaration+readonly"
