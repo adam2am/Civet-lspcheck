@@ -278,6 +278,14 @@
       ]
     },
     {
+      "match": "\\b(from)(?=\\s*('|\"|`|\\.\\.?/|[\\p{L}_$]))",
+      "captures": {
+        "1": {
+          "name": "keyword.control.from.civet"
+        }
+      }
+    },
+    {
       "match": "\\b(?<![\\.\\$])(break|by|case|catch|continue|else|finally|for|in|of|if|return|switch|then|throw|try|unless|when|while|until|loop|do|yield|async|await|(?<=for)\\s+own)(?!\\s*:)\\b",
       "name": "keyword.control.civet"
     },
